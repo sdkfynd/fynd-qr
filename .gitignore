@@ -1,0 +1,14 @@
+node_modules/
+.DS_Store
+*.log
+dist/
+.env
+.env.*
+!.env.example
+.venv*/
+qa-scans/
+work/
+verified-downloads/
+# Local review records contain internal asset provenance; keep out of source uploads.
+ASSET_SOURCES.md
+CUSTOMIZATION_REVIEW.md
