@@ -1,0 +1,53 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Fynd QR browser QA</title><style>body{font:15px system-ui;max-width:900px;margin:40px auto;background:#f6f5f0;color:#173d38}li{margin:8px 0}.fail{color:#b00020}img{width:240px}h1{font-size:26px}</style><h1>Browser image and export verification</h1><p>This local test uses generated image fixtures, not the native file picker.</p><button id="run">Run checks</button><p id="status" role="status">Ready</p><ol id="results"></ol><img id="sample" alt="Last verified customized QR code" hidden><script type="module">
+import {normalizeLogo,svgToPng} from '../src/images.ts';
+import {buildSVG,buildPayload,DEFAULT_DESIGN} from '../src/qr.ts';
+import {BODY_SHAPES,FRAME_SHAPES,BALL_SHAPES} from '../src/shapes.ts';
+import jsQR from 'jsqr';
+import {logoPresets} from '../src/presets.ts';
+const result=document.querySelector('#results'),status=document.querySelector('#status');
+async function imageData(blob){const img=new Image();const url=URL.createObjectURL(blob);try{img.src=url;await img.decode();const c=document.createElement('canvas');c.width=img.naturalWidth;c.height=img.naturalHeight;const ctx=c.getContext('2d');ctx.drawImage(img,0,0);return ctx.getImageData(0,0,c.width,c.height)}finally{URL.revokeObjectURL(url)}}
+function check(condition,message){if(!condition)throw new Error(message)}
+async function scanBoth(svg,size,payload){
+ for(const [format,blob] of [['SVG',new Blob([svg],{type:'image/svg+xml'})],['PNG',await svgToPng(svg,size)]]){
+  const data=await imageData(blob);check(data.width===size&&data.height===size,format+' dimensions differ');
+  check(jsQR(data.data,data.width,data.height)?.data===payload,format+' jsQR scan differs');
+ }
+}
+document.querySelector('#run').addEventListener('click',async()=>{
+ result.replaceChildren();let passed=0,failed=0;status.textContent='Running';document.querySelector('#run').disabled=true;
+ async function test(name,fn){const li=document.createElement('li');try{await fn();li.textContent='PASS — '+name;passed++}catch(e){li.textContent='FAIL — '+name+': '+e.message;li.className='fail';failed++}result.append(li)}
+ const canvas=document.createElement('canvas');canvas.width=160;canvas.height=100;const ctx=canvas.getContext('2d');ctx.fillStyle='#ed7959';ctx.fillRect(0,0,160,100);ctx.fillStyle='#fff';ctx.fillRect(20,20,40,40);ctx.fillRect(95,20,40,40);ctx.fillRect(20,70,20,20);
+ let logo='';
+ for(const mime of ['image/png','image/jpeg','image/webp']) await test(mime+' normalizes locally to a square embedded PNG',async()=>{const b=await new Promise(r=>canvas.toBlob(r,mime));logo=await normalizeLogo(new File([b],'sample.'+mime.split('/')[1],{type:mime}));check(logo.startsWith('data:image/png;base64,'),'not PNG');const normalized=await imageData(await(await fetch(logo)).blob());check(normalized.width===240&&normalized.height===240,'wrong dimensions')});
+ await test('non-image and oversize uploads are rejected',async()=>{for(const file of [new File(['text'],'bad.txt',{type:'text/plain'}),new File([new Uint8Array(2*1024*1024+1)],'large.png',{type:'image/png'}),new File(['broken'],'broken.png',{type:'image/png'})]){let rejected=false;try{await normalizeLogo(file)}catch{rejected=true}check(rejected,'invalid image accepted')}});
+ const palettes=[['Forest','#173d38','#ffffff'],['Ink','#242727','#ffffff'],['Terracotta','#893f32','#fff6ed'],['Ocean','#214c76','#eff7ff'],['Berry','#653758','#fdf2f8']];
+ const payload='https://example.com/customized?source=qa';
+ for(const [name,foreground,background] of palettes) for(const pattern of ['square','rounded','dots']) await test(name+' / '+pattern+' / logo: browser PNG and SVG decode',async()=>{const svg=buildSVG(payload,{foreground,background,pattern,logo},512);for(const blob of [new Blob([svg],{type:'image/svg+xml'}),await svgToPng(svg,512)]){const data=await imageData(blob);check(data.width===512,'wrong export size');check(jsQR(data.data,data.width,data.height)?.data===payload,'scan differs')}const sample=document.querySelector('#sample');sample.src='data:image/svg+xml;base64,'+btoa(svg);sample.hidden=false;});
+ for(const preset of logoPresets.filter(p=>p.src)) for(const pattern of ['square','rounded','dots']) await test(preset.name+' preset / '+pattern+': actual asset, browser SVG and PNG decode',async()=>{const response=await fetch(preset.src);check(response.ok,'asset unavailable');const logo=await normalizeLogo(new File([await response.blob()],preset.name+'.png',{type:'image/png'}));const svg=buildSVG(payload,{...DEFAULT_DESIGN,pattern,logo},512);for(const blob of [new Blob([svg],{type:'image/svg+xml'}),await svgToPng(svg,512)]){const data=await imageData(blob);check(jsQR(data.data,data.width,data.height)?.data===payload,'scan differs')}});
+ for(const size of [1024,2048,4096]) await test(size+'px PNG preserves dimensions and scan data',async()=>{const payload='https://example.com/export';const blob=await svgToPng(buildSVG(payload,DEFAULT_DESIGN,size),size);const data=await imageData(blob);check(data.width===size&&data.height===size,'wrong PNG size');check(jsQR(data.data,data.width,data.height)?.data===payload,'scan differs')});
+ const officialLogos=[];
+ for(const preset of logoPresets){const response=await fetch(preset.src);officialLogos.push(await normalizeLogo(new File([await response.blob()],preset.name+'.png',{type:'image/png'})))}
+ for(const [bodyIndex,{id:pattern}] of BODY_SHAPES.entries())await test(pattern+': all 64 eye combinations, palette colors and official logos; SVG + PNG; jsQR',async()=>{
+  for(const [frameIndex,{id:eyeFrame}] of FRAME_SHAPES.entries())for(const [ballIndex,{id:eyeBall}] of BALL_SHAPES.entries()){
+   const [,foreground,background]=palettes[(bodyIndex+frameIndex+ballIndex)%palettes.length];
+   const design={foreground,background,pattern,eyeFrame,eyeBall,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[(frameIndex+ballIndex)%2]};
+   status.textContent=`Checking ${pattern} / ${eyeFrame} / ${eyeBall}…`;
+   try{await scanBoth(buildSVG(payload,design,512),512,payload)}catch(error){throw new Error(eyeFrame+' / '+eyeBall+': '+error.message)}
+  }
+ });
+ const typedExamples=[['url',{url:'example.com/menu?table=7'}],['text',{text:'Hello, नमस्ते 🌿\nA little connection.'}],['wifi',{ssid:'Studio;Guest:2',security:'WPA',password:'test;pass:word\\123',hidden:'true'}],['email',{email:'hello@example.com',subject:'Hello & welcome',body:'A new line\nWith spaces'}],['phone',{phone:'+1 (555) 123-4567'}],['sms',{phone:'+91 98765 43210',message:'Hello & welcome 🌿'}],['contact',{firstName:'Alex',lastName:'Morgan',email:'alex@example.com',phone:'+1 555 123 4567',organization:'Studio; North',website:'example.com'}]];
+ for(const [type,values] of typedExamples)await test(type+': eight mixed shapes, independent eye colors, both logos; SVG + PNG; jsQR',async()=>{
+  const text=buildPayload(type,values);
+  for(const [i,{id:pattern}] of BODY_SHAPES.entries()){
+   const design={...DEFAULT_DESIGN,pattern,eyeFrame:FRAME_SHAPES[(i+2)%8].id,eyeBall:BALL_SHAPES[(i+5)%8].id,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[i%2]};
+   await scanBoth(buildSVG(text,design,1024),1024,text);
+  }
+ });
+ for(const [i,{id:pattern}] of BODY_SHAPES.entries())await test(pattern+': 1,100 UTF-8 bytes, mixed eyes, logo; 2048px SVG + PNG; jsQR',async()=>{
+  const text='abcdEFG!@é'.repeat(100);
+  const design={...DEFAULT_DESIGN,pattern,eyeFrame:FRAME_SHAPES[i].id,eyeBall:BALL_SHAPES[(i+3)%8].id,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[i%2]};
+  await scanBoth(buildSVG(text,design,2048),2048,text);
+ });
+ status.textContent=`${passed} passed; ${failed} failed`;document.querySelector('#run').disabled=false;
+});
+</script></html>
