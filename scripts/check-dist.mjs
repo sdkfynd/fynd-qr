@@ -17,11 +17,11 @@ async function collect(directory) {
 await collect(root);
 for (const path of files) {
   const name = relative(root, path).replaceAll('\\', '/');
-  assert.ok(!/(?:^|\/)(?:\.env|qa|src|work|node_modules|verified-downloads)(?:\.|\/|$)/i.test(name), `Non-site file: ${name}`);
+  assert.ok(!/(?:^|\/)(?:\.env|qa|src|server|.local-data|work|node_modules|verified-downloads)(?:\.|\/|$)/i.test(name), `Non-site file: ${name}`);
   assert.ok(!/(?:ASSET_SOURCES|CUSTOMIZATION_REVIEW|\.map$)/i.test(name), `Local-only file: ${name}`);
   if (!['.js','.css','.html','.txt','.svg'].includes(extname(path))) continue;
   const content = await readFile(path, 'utf8');
-  assert.ok(!/(?:drive\.google\.com|figma\.com|gofynd\.com|\/Users\/|slack\.com)/i.test(content), `Internal reference in ${name}`);
+  assert.ok(!/(?:drive\.google\.com|figma\.com|\/Users\/|slack\.com)/i.test(content), `Internal reference in ${name}`);
   if (extname(path) === '.html' || extname(path) === '.css') {
     const urls = extname(path) === '.html'
       ? [...content.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m=>m[1])

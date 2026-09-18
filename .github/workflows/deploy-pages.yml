@@ -33,12 +33,20 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify QR payloads and scan fixtures
         run: pnpm test
+      - name: Verify backend types and deployment readiness
+        env:
+          QR_API_URL: ${{ vars.QR_API_URL }}
+        run: |
+          pnpm typecheck:server
+          node scripts/check-api.mjs
       - name: Read GitHub Pages configuration
         id: pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6
       - name: Build and check the public artifact
         env:
           QR_BASE_PATH: ${{ steps.pages.outputs.base_path }}/
+          VITE_API_URL: ${{ vars.QR_API_URL }}
+          VITE_CREATOR_ACCESS: work
         run: |
           pnpm build
           pnpm check:dist

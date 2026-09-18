@@ -1,6 +1,8 @@
 import './style.css';
 import './design-system.css';
 import './customization.css';
+import { initWorkspace, saveDynamic } from './workspace';
+import type { QRDraft, QRRecord } from './models';
 import { BODY_SHAPES, FRAME_SHAPES, BALL_SHAPES, shapeThumbnail, type ShapeCategory } from './shapes';
 import { logoPresets } from './presets';
 import { normalizeLogo, svgToPng } from './images';
@@ -29,6 +31,7 @@ const paths: Record<string, string> = {
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
 };
 const icon = (name: string, extra = '') => `<svg ${extra} width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.link}</svg>`;
+const publicAccess = import.meta.env.VITE_CREATOR_ACCESS === 'public';
 const brand = `<img class="brand-symbol" src="${import.meta.env.BASE_URL}logos/fynd.svg" alt="" width="32" height="32"><span>Fynd QR</span>`;
 const types: { id: ContentType; label: string; icon: string; title: string; description: string }[] = [
   { id: 'url', label: 'Website', icon: 'link', title: 'Where should your code take people?', description: 'A website, a menu, your latest project. You name it.' },
@@ -39,6 +42,13 @@ const types: { id: ContentType; label: string; icon: string; title: string; desc
   { id: 'sms', label: 'SMS', icon: 'sms', title: 'Get the message started.', description: 'Prepare a text message. They choose when to send it.' },
   { id: 'contact', label: 'Contact', icon: 'contact', title: 'Make a lasting connection.', description: 'Share a contact card that saves straight to their phone.' },
 ];
+let qrMode: 'static' | 'dynamic' = 'static';
+let editingCode: QRRecord | null = null;
+let savedSignature = '';
+let campaignName = '';
+let accountSaveBusy = false;
+let staticSnapshot: { type: ContentType; fields: Record<string, string>; design: Design; record: QRRecord | null; signature: string } | null = null;
+let dynamicSnapshot: { fields: Record<string, string>; design: Design; record: QRRecord | null; signature: string; name: string } | null = null;
 let activeType: ContentType = 'url';
 let values: Record<ContentType, Record<string, string>> = { url: { url: 'https://example.com' }, text: {}, wifi: { security: 'WPA' }, email: {}, phone: {}, sms: {}, contact: {} };
 let design: Design = { ...DEFAULT_DESIGN };
@@ -68,18 +78,20 @@ $('#app').innerHTML = `
   <a class="skip-link" href="#generator">Skip to generator</a>
   <header class="site-header wrap">
     <a href="#" class="brand" aria-label="Fynd QR home">${brand}</a>
-    <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#questions">FAQs</a><a class="nav-cta" href="#generator">Create a QR code ${icon('arrow')}</a></nav>
+    <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><button id="my-codes" class="nav-library">My QR Codes</button><button id="account-button" class="nav-account">Sign in</button><a class="nav-cta" href="#generator">Create a QR code ${icon('arrow')}</a></nav>
   </header>
   <main>
     <section class="hero wrap" aria-labelledby="hero-title">
       <div class="hero-copy"><div class="eyebrow"><span></span> FREE STATIC QR GENERATOR</div>
         <h1 id="hero-title">Every connection.<br>One simple scan.</h1>
       </div>
-      <div class="hero-aside"><p>Create a QR code for anything you want to share. Make it yours, download it, and connect.</p><div class="hero-perks"><span>${icon('check')} Free to create</span><span>${icon('check')} No sign-up</span><span>${icon('check')} Yours to keep</span></div></div>
+      <div class="hero-aside"><p>Create a QR code for anything you want to share. Make it yours, download it, and connect.</p><div class="hero-perks"><span>${icon('check')} Free to create</span><span>${icon('check')} ${publicAccess ? 'No sign-up' : 'Team workspace'}</span><span>${icon('check')} Yours to keep</span></div><button type="button" class="hero-dynamic" data-dynamic>Create a dynamic QR <span>↗</span></button></div>
     </section>
+    <div class="mode-bar wrap"><div class="mode-tabs" role="group" aria-label="QR code mode"><button id="mode-static" data-static aria-pressed="true">Static QR</button><button id="mode-dynamic" data-dynamic aria-pressed="false">Dynamic QR ↗</button></div><p id="mode-description">Create, download, and share. ${publicAccess ? 'No sign-in needed.' : 'Your static codes stay unchanged.'}</p></div>
     <section id="generator" tabindex="-1" class="generator wrap" aria-label="QR code generator">
       <div class="editor">
         <div class="section-heading"><span class="step-number">01</span><h2>Make it useful</h2><span class="step-caption">Choose your content</span></div>
+        <div class="dynamic-fields" hidden><label for="campaign-name">Give this connection a name</label><input id="campaign-name" maxlength="80" placeholder="e.g. Summer campaign"><p class="small-note">Only you see this name. The destination can change anytime.</p></div>
         <div class="type-tabs" role="tablist" aria-label="QR code content type">${types.map((t, i) => `<button id="tab-${t.id}" type="button" role="tab" data-type="${t.id}" aria-selected="${i === 0}" aria-controls="content-panel" tabindex="${i === 0 ? '0' : '-1'}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>
         <div id="content-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-url">
           <h3 id="content-title"></h3><p class="section-description" id="content-description"></p>
@@ -117,24 +129,24 @@ $('#app').innerHTML = `
         <p id="size-note" class="size-note" hidden></p>
         <button type="button" id="download-png" class="button-primary">${icon('download')} <span class="button-label">Download PNG</span> ${icon('arrow')}</button>
         <button type="button" id="download-svg" class="button-secondary">${icon('download')} <span class="button-label">Download SVG</span> <span class="format-hint">Scales to any size</span></button>
-        <p class="download-note">No expiry. No scan limits. All yours.</p>
+        <button id="save-static" type="button" class="text-button save-static">Save to My QR Codes ↗</button><p id="dynamic-error" class="field-error" role="alert"></p><p id="dynamic-link-note" class="dynamic-link-note" hidden></p><p class="download-note">No expiry. No scan limits. All yours.</p>
         <div class="static-note">${icon('info')}<p><strong>Made to stay the same.</strong> This is a static QR code. Its content can’t be changed after download.</p></div>
         </div>
       </aside>
     </section>
-    <div class="privacy-strip wrap">${icon('lock')}<p>A little privacy goes a long way. Your content stays in your browser.</p><button type="button" data-privacy>Our promise ${icon('arrow')}</button></div>
+    <div class="privacy-strip wrap">${icon('lock')}<p>A little privacy goes a long way. Static generation stays in your browser. Saving is your choice.</p><button type="button" data-privacy>Our promise ${icon('arrow')}</button></div>
     <section id="how-it-works" class="how-section wrap"><div class="how-intro"><div class="eyebrow">FROM IDEA TO SCAN</div><h2>Three steps.<br>So many connections.</h2><p>A menu on a table. A link on a poster.<br>Your next great idea, one scan away.</p></div><ol class="how-steps"><li><span>1</span><h3>Give it somewhere to go</h3><p>Choose a content type and add the details you want to share.</p></li><li><span>2</span><h3>Add a touch of you</h3><p>Pick your colors, find your style, and make it feel like yours.</p></li><li><span>3</span><h3>Download. Share. Connect.</h3><p>Save your code, test it with your phone, and put it out into the world.</p></li></ol></section>
     <section id="questions" class="faq-section wrap"><div><div class="eyebrow">THE LITTLE DETAILS</div><h2>Good questions.<br>Simple answers.</h2></div><div class="faq-list">
-      <details><summary>Is it really free? ${icon('chevron')}</summary><p>Yes. Create and download as many static QR codes as you like. No account or subscription is needed.</p></details>
-      <details><summary>Will my QR code expire? ${icon('chevron')}</summary><p>The code itself doesn’t expire and has no scan limit. If it links to a website, that website still needs to stay available.</p></details>
-      <details><summary>Can I change it after downloading? ${icon('chevron')}</summary><p>The information is stored directly in this static QR code, so it can’t be updated later. You can create a new code any time. Editable destinations and scan analytics are not part of this version.</p></details>
+      <details><summary>Is it really free? ${icon('chevron')}</summary><p>Yes. Create and download as many static QR codes as you like. The pilot is available to Fynd work accounts. No separate QR subscription is needed.</p></details>
+      <details><summary>Will my QR code expire? ${icon('chevron')}</summary><p>Static codes don’t expire and have no scan limit. Linked websites must stay available. Dynamic codes also depend on our redirect service remaining available and the code staying active.</p></details>
+      <details><summary>Can I change it after downloading? ${icon('chevron')}</summary><p>Static codes keep their original content. Choose Dynamic QR for an editable website destination and scan analytics. Sign in with your work Google account to create and manage dynamic codes.</p></details>
       <details><summary>Should I download PNG or SVG? ${icon('chevron')}</summary><p>PNG is easy to use on social media, in documents, or in everyday designs. SVG stays sharp at any size, making it a good choice for posters and print.</p></details>
       <details><summary>How do I make sure it scans well? ${icon('chevron')}</summary><p>Use a dark code on a light background and keep the clear border around it. A small logo is best. Test the downloaded file with your phone, and test a printed sample at the actual size before printing more.</p></details>
     </div></section>
   </main>
   <footer class="site-footer wrap"><a class="brand" href="#" aria-label="Fynd QR home">${brand}</a><p>Made for everyday connections.</p><button type="button" data-privacy>Privacy</button><span>Made for everyone ↗</span></footer>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <dialog id="privacy-dialog" aria-labelledby="privacy-title"><button id="close-dialog" class="dialog-close" aria-label="Close privacy information">${icon('close')}</button><span class="dialog-icon">${icon('shield')}</span><h2 id="privacy-title">Your content is yours.</h2><p>QR codes are created right here in your browser. Your links, messages, Wi-Fi passwords, contact details, and logos aren’t sent to a server.</p><p>This prototype has no accounts, cookies, analytics, or browser storage. Refreshing the page clears your entries. Downloaded QR files contain the information you chose to share, so share them with the right people.</p><button type="button" class="button-primary" id="privacy-done">Sounds good ${icon('check')}</button></dialog>
+  <dialog id="privacy-dialog" aria-labelledby="privacy-title"><button id="close-dialog" class="dialog-close" aria-label="Close privacy information">${icon('close')}</button><span class="dialog-icon">${icon('shield')}</span><h2 id="privacy-title">Your content is yours.</h2><p>Static QR codes are generated in your browser. Their content and logos are sent to our account service only when you choose Save. Downloaded files contain the information you chose to share.</p><p>Google sign-in is restricted to gofynd.com work accounts. An account session is kept in this tab’s session storage. Saved designs and dynamic destinations are stored in our database. Dynamic links record scan events for up to 90 days, including approximate device, browser, referrer and, when available, country. Visitor estimates use a code-specific hash; our analytics do not store raw IP addresses. Hosting providers may keep their own access logs. All-time scan totals remain after detailed events expire.</p><button type="button" class="button-primary" id="privacy-done">Sounds good ${icon('check')}</button></dialog>
 `;
 
 function escapeHtml(value: string) { return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)); }
@@ -166,6 +178,7 @@ function renderForm() {
 }
 function syncWifi() { $('#password-field').hidden = values.wifi.security === 'nopass'; $<HTMLInputElement>('#field-password').disabled = values.wifi.security === 'nopass'; }
 function setType(type: ContentType) {
+  if (qrMode === 'dynamic' && type !== 'url') return;
   activeType = type;
   document.querySelectorAll<HTMLButtonElement>('[data-type]').forEach(button => { const selected = button.dataset.type === type; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; });
   renderForm(); updatePreview();
@@ -175,17 +188,19 @@ function setType(type: ContentType) {
 function setDownloadEnabled(enabled: boolean) {
   for (const format of ['png', 'svg'] as const) {
     const button = $<HTMLButtonElement>(`#download-${format}`);
-    button.disabled = !enabled || downloadBusy || logoBusy;
+    button.disabled = !enabled || downloadBusy || logoBusy || accountSaveBusy || (qrMode === 'dynamic' && format === 'svg' && dynamicDirty());
     button.setAttribute('aria-busy', String(activeDownload === format));
     button.classList.toggle('is-busy', activeDownload === format);
-    button.querySelector('.button-label')!.textContent = activeDownload === format ? 'Preparing your file…' : `Download ${format.toUpperCase()}`;
+    button.querySelector('.button-label')!.textContent = accountSaveBusy ? 'Saving your code…' : activeDownload === format ? 'Preparing your file…' : qrMode === 'dynamic' && format === 'png' && dynamicDirty() ? (editingCode ? 'Save changes' : 'Create dynamic QR') : `Download ${format.toUpperCase()}`;
   }
+  $<HTMLButtonElement>('#save-static').disabled = !enabled || logoBusy || accountSaveBusy;
 }
 function updatePreview() {
   clearTimeout(updateTimer);
   currentPayload = null; currentSvg = null;
   $('#content-error').textContent = ''; $('#design-error').textContent = '';
   try { currentPayload = buildPayload(activeType, values[activeType]); } catch (error) { $('#content-error').textContent = (error as Error).message; }
+  if (qrMode === 'dynamic' && currentPayload && editingCode?.scanUrl) currentPayload = editingCode.scanUrl;
   let validDesign = true;
   invalidColor = null;
   try { validateDesign(design); } catch (error) { validDesign = false; invalidColor = error instanceof DesignError ? error.field : 'foreground'; $('#design-error').textContent = (error as Error).message; }
@@ -223,6 +238,11 @@ function updatePreview() {
   $('#payload-text').textContent = summaries[activeType];
   $('#payload-text').title = activeType === 'wifi' ? 'Wi-Fi network name; password is included in the QR code.' : summaries[activeType];
   $('#payload-icon').innerHTML = icon(types.find(t => t.id === activeType)!.icon);
+  if (qrMode === 'dynamic') {
+    $('#preview-status').textContent = editingCode ? (dynamicDirty() ? 'Unsaved changes' : editingCode.status === 'active' ? 'Dynamic · Active' : `Dynamic · ${editingCode.status}`) : 'Design preview';
+    $('#dynamic-link-note').textContent = editingCode?.scanUrl ? `${new URL(editingCode.scanUrl).hostname === 'localhost' ? 'Local test link — opens only on this computer' : 'Permanent scan link'}: ${editingCode.scanUrl}` : 'Create your dynamic code to activate its permanent scan link. This preview shows your design only.';
+    $('#scan-hint').hidden = !editingCode || !valid;
+  }
   setDownloadEnabled(valid);
 }
 function syncDesignControls() {
@@ -261,6 +281,12 @@ function downloadBlob(blob: Blob, name: string) { const url = URL.createObjectUR
 async function download(format: 'png' | 'svg') {
   updatePreview();
   if (!currentSvg || !currentPayload || downloadBusy || logoBusy) return;
+  if (qrMode === 'dynamic' && !campaignName.trim()) { $('#dynamic-error').textContent = 'Give this code a name before creating it.'; $('#campaign-name').focus(); return; }
+  if (qrMode === 'dynamic' && dynamicDirty()) {
+    accountSaveBusy = true; setDownloadEnabled(false); $('#dynamic-error').textContent = '';
+    try { await saveDynamic(); } finally { accountSaveBusy = false; updatePreview(); }
+    return;
+  }
   const type = activeType, pixels = Number($<HTMLSelectElement>('#download-size').value);
   const svg = buildSVG(currentPayload, { ...design }, pixels);
   const fileName = `fynd-qr-${type}-${pixels}.${format}`;
@@ -375,3 +401,42 @@ $('#privacy-done').addEventListener('click', () => dialog.close());
 dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
 if (window.matchMedia('(max-width: 640px)').matches) $<HTMLDetailsElement>('.design-section').open = false;
 renderForm(); updatePreview();
+
+function editorDraft(): QRDraft {
+  return { kind: qrMode, name: qrMode === 'dynamic' ? campaignName.trim() : editingCode?.name || '', contentType: activeType, fields: { ...values[activeType] }, design: { ...design } };
+}
+function dynamicDirty() { return qrMode === 'dynamic' && (!editingCode || JSON.stringify(editorDraft()) !== savedSignature); }
+function modeUI() {
+  const dynamic = qrMode === 'dynamic';
+  $('#generator').classList.toggle('dynamic-editor', dynamic);
+  $('#mode-static').setAttribute('aria-pressed', String(!dynamic)); $('#mode-dynamic').setAttribute('aria-pressed', String(dynamic));
+  $('.dynamic-fields').hidden = !dynamic; $('#save-static').hidden = dynamic; $('#dynamic-link-note').hidden = !dynamic;
+  $('#mode-description').textContent = dynamic ? 'One permanent link. Editable destinations. Measurable connections.' : publicAccess ? 'Create, download, and share. No sign-in needed.' : 'Create, download, and share. Your static codes stay unchanged.';
+  $('.download-note').textContent = dynamic ? 'Keep your scan service available. Test before printing.' : 'No expiry. No scan limits. All yours.';
+  $('.static-note').innerHTML = icon('info') + (dynamic ? '<p><strong>Made to move with you.</strong> Update the destination in My QR Codes. Your printed QR stays the same.</p>' : '<p><strong>Made to stay the same.</strong> This is a static QR code. Its content can’t be changed after download.</p>');
+  $('#dynamic-error').textContent = ''; $<HTMLInputElement>('#campaign-name').value = campaignName;
+}
+function loadEditor(record: QRRecord) {
+  if (qrMode === 'static' && record.kind === 'dynamic') rememberStatic();
+  qrMode = record.kind; editingCode = record; activeType = record.contentType; values[activeType] = { ...record.fields }; design = { ...record.design }; campaignName = record.name;
+  savedSignature = JSON.stringify(editorDraft()); modeUI(); syncLoadedLogo(); syncDesignControls(); setType(activeType);
+}
+function rememberStatic() { staticSnapshot = { type: activeType, fields: { ...values[activeType] }, design: { ...design }, record: editingCode, signature: savedSignature }; }
+function syncLoadedLogo() {
+  ++logoRevision; logoBusy = false; selectedPreset = null;
+  document.querySelectorAll('[data-preset]').forEach(b => { b.setAttribute('aria-pressed', 'false'); b.setAttribute('aria-busy', 'false'); });
+  $('#logo-progress').hidden = true; $('#logo-error').textContent = ''; $('.upload-area').setAttribute('aria-busy', 'false');
+  $('#logo-thumbnail').hidden = !design.logo; $('#remove-logo').hidden = !design.logo; $('#upload-icon').toggleAttribute('hidden', !!design.logo);
+  if (design.logo) $<HTMLImageElement>('#logo-thumbnail').src = design.logo; else $<HTMLImageElement>('#logo-thumbnail').removeAttribute('src');
+  $('#logo-label').innerHTML = design.logo ? 'Saved logo' : 'Choose a logo<span>PNG, JPG or WebP · up to 2 MB</span>';
+}
+$('#campaign-name').addEventListener('input', event => { campaignName = (event.target as HTMLInputElement).value; $('#dynamic-error').textContent = ''; updatePreview(); });
+initWorkspace({
+  draft: editorDraft, record: () => editingCode, load: loadEditor,
+  saved: record => { editingCode = record; campaignName = record.name; values[activeType] = { ...record.fields }; savedSignature = JSON.stringify(editorDraft()); renderForm(); updatePreview(); },
+  dynamic: (fresh = false) => { if (qrMode === 'dynamic' && !fresh) return; if (qrMode === 'static') rememberStatic(); qrMode = 'dynamic'; const previous = fresh ? null : dynamicSnapshot; editingCode = previous?.record || null; campaignName = previous?.name || ''; savedSignature = previous?.signature || ''; activeType = 'url'; values.url = previous?.fields || { url: '' }; if (previous) design = previous.design; modeUI(); syncLoadedLogo(); syncDesignControls(); setType('url'); $('#campaign-name').focus(); },
+  static: () => { if (qrMode === 'static') return; dynamicSnapshot = { fields: { ...values.url }, design: { ...design }, record: editingCode, signature: savedSignature, name: campaignName }; qrMode = 'static'; editingCode = staticSnapshot?.record || null; savedSignature = staticSnapshot?.signature || ''; if (staticSnapshot) { activeType = staticSnapshot.type; values[activeType] = staticSnapshot.fields; design = staticSnapshot.design; } modeUI(); syncLoadedLogo(); syncDesignControls(); setType(activeType); },
+  dirty: () => editingCode ? JSON.stringify(editorDraft()) !== savedSignature : qrMode === 'dynamic' && !!(campaignName || values.url.url),
+  reset: () => { staticSnapshot = null; dynamicSnapshot = null; qrMode = 'static'; editingCode = null; campaignName = ''; savedSignature = ''; values = { url: { url: 'https://example.com' }, text: {}, wifi: { security: 'WPA' }, email: {}, phone: {}, sms: {}, contact: {} }; activeType = 'url'; design = { ...DEFAULT_DESIGN }; modeUI(); syncLoadedLogo(); syncDesignControls(); setType('url'); },
+  valid: () => { updatePreview(); return !!currentSvg && !logoBusy; }, toast,
+});

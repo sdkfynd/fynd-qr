@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+const raw = process.env.QR_API_URL || '';
+assert.ok(raw, 'Set the QR_API_URL repository variable to the deployed account service before publishing the pilot.');
+const url = new URL(raw);
+assert.ok(url.protocol === 'https:' && url.origin === raw && !url.username && !url.password, 'QR_API_URL must be an HTTPS origin.');
+const origin = 'https://sdkfynd.github.io';
+const [health, response] = await Promise.all(['/health', '/api/config'].map(path => fetch(raw + path, { headers: { Origin: origin }, signal: AbortSignal.timeout(10_000) })));
+assert.ok(health.ok && (await health.json()).status === 'ok', 'The backend health check did not pass.');
+assert.ok(response.ok, 'The backend configuration endpoint is unavailable.');
+assert.equal(response.headers.get('access-control-allow-origin'), origin, 'The backend must allow the personal GitHub Pages origin.');
+const config = await response.json();
+assert.ok(config.googleClientId, 'Google sign-in must be configured before publishing.');
+assert.equal(config.localPreview, false, 'A development test account must never be published.');
+console.log('Backend health, Google configuration and allowed origin verified.');
