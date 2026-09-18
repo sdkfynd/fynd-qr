@@ -10,7 +10,8 @@ const designSchema = z.object({
   eyeFrame: z.enum(FRAME_SHAPES.map(s => s.id)).optional(),
   eyeBall: z.enum(BALL_SHAPES.map(s => s.id)).optional(),
   eyeFrameColor: color.optional(), eyeBallColor: color.optional(),
-  logo: z.string().max(180_000).regex(/^data:image\/png;base64,[A-Za-z\d+/]+=*$/).optional(),
+  logoSize: z.number().min(10).max(18).optional(),
+  logo: z.string().max(330_000).regex(/^data:image\/png;base64,[A-Za-z\d+/]+=*$/).optional(),
 }).strict();
 export const draftSchema = z.object({
   kind: z.enum(['static', 'dynamic']), name: z.string().trim().min(1).max(80),

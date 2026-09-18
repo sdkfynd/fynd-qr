@@ -159,3 +159,16 @@ for (const [name, foreground, background] of palettes) for (const pattern of ['s
     assert.equal(await decode(buildSVG(payload, design, 512), 512), payload);
   });
 }
+
+for (const logoSize of [10, 11, 12, 13, 14, 15, 16, 17, 18]) test(`logo size ${logoSize}%: all body shapes and content types decode`, async () => {
+  const logo = `data:image/png;base64,${(await readFile(new URL('../public/logos/fynd.png', import.meta.url))).toString('base64')}`;
+  for (const [type, input, expected] of fixtures) for (const [i, { id: pattern }] of BODY_SHAPES.entries()) {
+    const design = { ...DEFAULT_DESIGN, pattern, eyeFrame: FRAME_SHAPES[i].id, eyeBall: BALL_SHAPES[(i + 3) % 12].id, logo, logoSize };
+    assert.equal(await decode(buildSVG(buildPayload(type, input), design, 1024), 1024), expected, `${type}/${pattern}/${logoSize}`);
+  }
+  const dense = 'abcdEFG!@é'.repeat(100);
+  assert.equal(await decode(buildSVG(dense, { ...DEFAULT_DESIGN, logo, logoSize }, 2048), 2048), dense);
+});
+test('invalid logo sizes cannot bypass safe bounds', () => {
+  for (const logoSize of [0, 9, 19, 100, NaN, Infinity]) assert.throws(() => buildSVG('https://example.com', { ...DEFAULT_DESIGN, logoSize }));
+});

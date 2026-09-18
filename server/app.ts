@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { Account } from '../src/models.ts';
 import type { Config } from './config.ts';
 import { Store, type CodeDoc } from './store.ts';
+import { registerLogoRoutes, normalizeStoredLogo } from './logos.ts';
 import { APIError, parseDraft } from './validation.ts';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
@@ -37,7 +38,7 @@ function scanError(title: string, message: string) {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Fynd QR</title><style>body{margin:0;font:16px/1.6 system-ui;background:#f8f8f9;color:#242424;min-height:100vh;display:grid;place-items:center}main{max-width:420px;padding:40px}b{font-size:22px}h1{font-size:30px;line-height:1.2}p{color:#656565}</style><main><b>Fynd QR</b><h1>${title}</h1><p>${message}</p></main></html>`;
 }
 export async function buildApp(config: Config, store: Store, verifyGoogle?: (credential: string) => Promise<TokenPayload | undefined>) {
-  const app = Fastify({ logger: false, trustProxy: config.trustProxy, bodyLimit: 240_000, exposeHeadRoutes: false, requestTimeout: 10_000 });
+  const app = Fastify({ logger: false, trustProxy: config.trustProxy, bodyLimit: 420_000, exposeHeadRoutes: false, requestTimeout: 10_000 });
   await app.register(cors, { origin: config.origins, methods: ['GET', 'POST', 'PATCH', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-QR-Referrer'] });
   await app.register(rateLimit, { global: true, max: 240, timeWindow: '1 minute' });
   app.addHook('onRequest', async (request, reply) => {
@@ -51,13 +52,14 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     if (status >= 500) console.error('Account service request failed', { route: request.routeOptions.url, type: (error as Error).name });
     reply.code(status).send({ error: status >= 500 ? 'The account service is temporarily unavailable. Please try again.' : (error as Error).message });
   });
-  function checkedDraft(body: unknown) {
+  async function checkedDraft(body: unknown) {
     const parsed = parseDraft(body, config.scanBase);
     if (parsed.destination) {
       const url = new URL(parsed.destination);
       if (config.scanPage && url.origin === new URL(config.scanPage).origin) throw new APIError(400, 'Choose a destination outside this scan service.');
       if (config.allowedDomains.length && !config.allowedDomains.includes(url.hostname)) throw new APIError(400, 'This destination domain is not approved for the pilot. Contact your administrator.');
     }
+    if (parsed.draft.design.logo) parsed.draft.design.logo = (await normalizeStoredLogo(parsed.draft.design.logo)).image;
     return parsed;
   }
   async function account(request: FastifyRequest) {
@@ -77,6 +79,7 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     await store.sessions.insertOne({ _id: hash(token), account: user, expiresAt: new Date(Date.now() + 12 * 3600_000) });
     return { token, account: user };
   }
+  registerLogoRoutes(app, store, account);
   app.get('/health', async () => { await store.db.command({ ping: 1 }); return { status: 'ok' }; });
   app.get('/api/config', async () => ({ googleClientId: config.googleClientId, localPreview: config.localPreview, scanBase: config.scanBase }));
   app.post('/api/auth/challenge', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async () => {
@@ -113,7 +116,7 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     if (!/^[a-z\d-]{16,80}$/i.test(key)) throw new APIError(400, 'A unique save request is required.');
     const existing = await store.codes.findOne({ ownerId: user.id, requestKey: key });
     if (existing) return { code: store.view(existing) };
-    const { draft, payload, destination } = checkedDraft(request.body);
+    const { draft, payload, destination } = await checkedDraft(request.body);
     if (await store.codes.countDocuments({ ownerId: user.id }) >= 500) throw new APIError(409, 'Your account has reached its 500-code limit.');
     const id = hexId(), slug = draft.kind === 'dynamic' ? randomBytes(9).toString('base64url') : null, now = new Date();
     const scanUrl = slug ? (config.scanPage ? `${config.scanPage}#r/${slug}` : `${config.scanBase}/r/${slug}`) : null;
@@ -130,7 +133,7 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     if (!parsed.success || (parsed.data.draft === undefined && !parsed.data.status)) throw new APIError(400, 'Choose a change to save.');
     const patch: Partial<CodeDoc> = { updatedAt: new Date() };
     if (parsed.data.draft) {
-      const { draft, payload, destination } = checkedDraft(parsed.data.draft);
+      const { draft, payload, destination } = await checkedDraft(parsed.data.draft);
       if (draft.kind !== code.kind) throw new APIError(400, 'A saved code cannot change between static and dynamic.');
       Object.assign(patch, draft, { destination, payload: code.scanUrl || payload });
     }

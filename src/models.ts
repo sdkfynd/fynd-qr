@@ -32,3 +32,6 @@ export interface Analytics {
   countries: { label: string; count: number }[];
   referrers: { label: string; count: number }[];
 }
+
+export interface LogoSummary { id: string; name: string; thumbnail: string; createdAt: string }
+export interface SavedLogo extends LogoSummary { image: string }

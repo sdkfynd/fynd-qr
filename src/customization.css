@@ -28,3 +28,8 @@
 @media(max-width:640px){.shape-choice{font-size:11px}.shape-heading{flex-direction:row;align-items:baseline;gap:8px}.preview-content{position:static}.shape-tabs button{font-size:12px}.match-eyes{margin-top:8px}}
 @media(max-width:370px){.shape-heading{flex-direction:column;gap:5px}.shape-choice{font-size:10px;min-height:80px}.shape-gallery{gap:6px}.shape-tabs button{padding-inline:8px;font-size:11px}}
 @media(prefers-reduced-motion:reduce){.shape-choice:active{transform:none}.shape-choice,.shape-tabs button{transition:none}}
+/* Subtle activity cue; the scannable image remains still. */
+.status-pill.is-live i{background:#3b8762;position:relative;overflow:visible}
+.status-pill.is-live i::after{content:'';position:absolute;inset:-3px;border:1px solid #4b946d;border-radius:50%;animation:preview-pulse 2.8s ease-out infinite}
+@keyframes preview-pulse{0%{transform:scale(.65);opacity:.65}65%,100%{transform:scale(1.4);opacity:0}}
+@media(prefers-reduced-motion:reduce){.status-pill.is-live i::after{animation:none;display:none}}

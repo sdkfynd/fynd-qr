@@ -1,6 +1,7 @@
 import { account, api, acceptSession, loadGoogle, logout, onAccountChange, restoreSession } from './api';
 import type { Analytics, QRDraft, QRRecord } from './models';
 import { buildSVG } from './qr';
+import { actionIcon } from './icons';
 import './workspace.css';
 
 export interface EditorBridge {
@@ -37,14 +38,28 @@ export function initWorkspace(editor: EditorBridge) {
     <dialog id="confirm-dialog" aria-labelledby="confirm-title"><button class="dialog-close" data-close="confirm-dialog" aria-label="Cancel">×</button><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button class="button-secondary" id="confirm-cancel">Cancel</button><button class="button-primary" id="confirm-yes">Continue</button></div></dialog>
   `);
   $('main').insertAdjacentHTML('beforeend', `<section id="workspace" class="workspace wrap" hidden aria-labelledby="workspace-title" tabindex="-1"><div id="workspace-content"></div></section>`);
-  document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => $<HTMLDialogElement>(`#${(el as HTMLElement).dataset.close}`).close()));
+  document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => { if (!saving) $<HTMLDialogElement>(`#${(el as HTMLElement).dataset.close}`).close(); }));
+  $('#save-dialog').addEventListener('cancel', e => { if (saving) e.preventDefault(); });
   $('#account-dialog').addEventListener('close', () => { ++authVersion; resolveLogin?.(false); resolveLogin = null; });
   $('#retry-auth').addEventListener('click', () => void authOptions());
   document.querySelectorAll('[data-dynamic]').forEach(el => el.addEventListener('click', () => void startDynamic()));
   document.querySelectorAll('[data-static]').forEach(el => el.addEventListener('click', () => { showEditor(); bridge.static(); }));
   document.querySelectorAll('.brand, .nav-cta').forEach(el => el.addEventListener('click', () => { if (!pilot || account) showEditor(); }));
   $('#my-codes').addEventListener('click', () => void showLibrary());
-  $('#account-button').addEventListener('click', () => void (account ? showLibrary() : requireAuth('Sign in to save your codes and make every scan count.')));
+  const closeAccount = () => { $('#account-panel').hidden = true; $('#account-button').setAttribute('aria-expanded', 'false'); };
+  $('#account-button').addEventListener('click', () => {
+    if (!account) { void requireAuth('Sign in to save your codes and make every scan count.'); return; }
+    const open = $('#account-panel').hidden; $('#account-panel').hidden = !open; $('#account-button').setAttribute('aria-expanded', String(open));
+    if (open) $('#account-signout').focus();
+  });
+  document.addEventListener('click', event => { if (!(event.target as Element).closest('.account-control')) closeAccount(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('#account-panel').hidden) { closeAccount(); $('#account-button').focus(); } });
+  $('#account-signout').addEventListener('click', async () => {
+    closeAccount();
+    if (bridge.dirty() && !await confirm('Sign out?', 'Your unsaved editor changes will be cleared. Saved codes and logos stay in your account.', 'Sign out')) return;
+    try { await logout(); bridge.reset(); window.google?.accounts.id.disableAutoSelect(); bridge.toast('Signed out. Your saved codes will be here next time.'); }
+    catch (error) { bridge.toast((error as Error).message); }
+  });
   $('#save-static').addEventListener('click', () => void saveStatic());
   $('#save-form').addEventListener('submit', async event => {
     event.preventDefault(); if (saving) return;
@@ -55,7 +70,13 @@ export function initWorkspace(editor: EditorBridge) {
   });
   onAccountChange(() => {
     document.body.classList.toggle('pilot-locked', pilot && !account);
-    $('#account-button').textContent = account ? (account.localPreview ? 'Local preview' : account.name.split(' ')[0]) : 'Sign in';
+    closeAccount();
+    $('#account-button').innerHTML = account ? `<span class="account-avatar" aria-hidden="true">${escape(account.name.charAt(0).toUpperCase())}</span><span class="account-label">Account</span><span aria-hidden="true">⌄</span>` : 'Sign in';
+    $('#account-button').setAttribute('aria-label', account ? `Account for ${account.name}` : 'Sign in');
+    $('#account-name').textContent = account?.name || '';
+    $('#account-email').textContent = account?.email || '';
+    $('#account-environment').hidden = !account?.localPreview;
+    $('#account-environment').textContent = 'Local test account · saved on this computer';
     if (!account) { records = []; selected = null; if (workspaceOpen) showEditor(); }
   });
   void restoreSession();
@@ -107,7 +128,7 @@ async function authOptions() {
   }
 }
 function showEditor() {
-  workspaceOpen = false; ++sequence; $('#workspace').hidden = true;
+  workspaceOpen = false; $('#my-codes').removeAttribute('aria-current'); ++sequence; $('#workspace').hidden = true;
   document.querySelectorAll<HTMLElement>('main > :not(#workspace)').forEach(el => el.hidden = false);
 }
 export async function startDynamic(fresh = false) {
@@ -123,7 +144,7 @@ async function saveStatic() {
 }
 async function persist(draft: QRDraft): Promise<QRRecord> {
   if (saving) throw new Error('Your code is being saved.');
-  saving = true; $<HTMLButtonElement>('#save-confirm').disabled = true;
+  saving = true; $<HTMLButtonElement>('#save-confirm').disabled = true; $('main').inert = true; $('.site-header').inert = true; $('#save-dialog').setAttribute('aria-busy', 'true');
   try {
     const existing = bridge.record(), signature = JSON.stringify(draft);
     if (signature !== saveSignature) { saveSignature = signature; saveKey = crypto.randomUUID(); }
@@ -131,7 +152,7 @@ async function persist(draft: QRDraft): Promise<QRRecord> {
       ? await api<{ code: QRRecord }>(`/codes/${existing.id}`, { method: 'PATCH', body: { revision: existing.revision, draft } })
       : await api<{ code: QRRecord }>('/codes', { method: 'POST', body: draft, key: saveKey });
     bridge.saved(code); saveKey = ''; saveSignature = ''; return code;
-  } finally { saving = false; $<HTMLButtonElement>('#save-confirm').disabled = false; }
+  } finally { saving = false; $<HTMLButtonElement>('#save-confirm').disabled = false; $('main').inert = false; $('.site-header').inert = false; $('#save-dialog').removeAttribute('aria-busy'); }
 }
 export async function saveDynamic(): Promise<boolean> {
   if (!bridge.valid()) return false;
@@ -140,13 +161,17 @@ export async function saveDynamic(): Promise<boolean> {
   catch (error) { $('#dynamic-error').textContent = (error as Error).message; return false; }
 }
 function card(code: QRRecord) {
-  const preview = buildSVG(code.payload, code.design, 100);
-  return `<article class="code-card"><button class="code-card-open" data-open="${code.id}" aria-label="Open ${escape(code.name)}"><div class="code-card-top"><span class="kind-badge ${code.kind}">${code.kind === 'dynamic' ? '↗ Dynamic' : '▦ Static'}</span><span class="state-badge ${code.status}">${code.status}</span></div><div class="card-preview">${preview}</div><h3>${escape(code.name)}</h3><p class="code-destination">${escape(code.kind === 'dynamic' ? code.destination! : `${code.contentType.toUpperCase()} · Saved design`)}</p><div class="card-foot"><span>${code.kind === 'dynamic' ? `<strong>${number(code.totalScans)}</strong> scans` : 'Ready to download'}</span><span>${code.kind === 'dynamic' ? 'View analytics ↗' : 'Open editor ↗'}</span></div></button></article>`;
+  const dynamic = code.kind === 'dynamic';
+  return `<article class="code-row"><div class="code-row-name"><h3>${escape(code.name)}</h3><p title="${escape(code.destination || code.contentType)}">${escape(dynamic ? code.destination! : `${code.contentType.toUpperCase()} · Saved design`)}</p></div><div class="code-row-type"><span class="kind-badge ${code.kind}">${dynamic ? '↗ Dynamic' : '▦ Static'}</span></div><div class="code-row-status">${dynamic ? `<span class="state-badge ${code.status}">${code.status}</span>` : '<span class="row-muted">Saved</span>'}</div><div class="code-row-scans">${dynamic ? `<strong>${number(code.totalScans)}</strong><span class="mobile-label"> ${code.totalScans === 1 ? 'scan' : 'scans'}</span>` : '<span class="row-muted">No analytics</span>'}</div><div class="code-row-date">${date(code.updatedAt)}</div><button class="row-action" data-open="${code.id}" aria-label="${dynamic ? 'View analytics for' : 'Edit'} ${escape(code.name)}">${dynamic ? 'Analytics' : 'Edit & download'} <span aria-hidden="true">↗</span></button></article>`;
+}
+async function openEditorRecord(code: QRRecord): Promise<boolean> {
+  if (bridge.dirty() && !await confirm('Open this saved code?', 'Your current unsaved editor changes will be replaced.', 'Open code')) return false;
+  showEditor(); bridge.load(code); $('#generator').scrollIntoView({ behavior: 'smooth' }); return true;
 }
 export async function showLibrary() {
   if (!await requireAuth('Your codes, in one place. Sign in with your work Google account to continue.')) return;
-  workspaceOpen = true; document.querySelectorAll<HTMLElement>('main > :not(#workspace)').forEach(el => el.hidden = true); $('#workspace').hidden = false;
-  selected = null;
+  workspaceOpen = true; $('#my-codes').setAttribute('aria-current', 'page'); document.querySelectorAll<HTMLElement>('main > :not(#workspace)').forEach(el => el.hidden = true); $('#workspace').hidden = false;
+  selected = null; $('#workspace-content').removeAttribute('aria-busy');
   const current = ++sequence;
   $('#workspace-content').innerHTML = '<p class="workspace-loading" role="status">Finding your connections…</p>';
   $('#workspace').focus(); window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -154,39 +179,42 @@ export async function showLibrary() {
   catch (error) { if (current === sequence) showError(error, () => void showLibrary()); }
 }
 function showError(error: unknown, retry: () => void) {
+  $('#workspace-content').removeAttribute('aria-busy');
   $('#workspace-content').innerHTML = `<div class="workspace-empty"><h2>Let’s try that again.</h2><p>${escape((error as Error).message)}</p><div class="inline-actions"><button class="button-primary" id="workspace-retry">Retry</button><button class="button-secondary" id="workspace-back">Back to generator</button></div></div>`;
   $('#workspace-retry').addEventListener('click', retry); $('#workspace-back').addEventListener('click', showEditor);
 }
 function renderLibrary() {
   const live = records.filter(r => r.status !== 'archived');
-  $('#workspace-content').innerHTML = `<div class="workspace-heading"><div><button class="text-button back-button" id="back-generator">← Back to generator</button><div class="eyebrow">YOUR CONNECTIONS, COLLECTED</div><h1 id="workspace-title">My QR Codes<span class="title-dot">.</span></h1><p>Little squares. Big possibilities. Everything you’ve saved, right here.</p></div><div class="workspace-actions"><button class="button-primary" id="new-dynamic">Create dynamic QR <span>↗</span></button><button class="text-button" id="signout">Sign out${account?.localPreview ? ' of local preview' : ''}</button></div></div>
-    ${account?.localPreview ? '<p class="preview-banner">LOCAL PREVIEW · Saved on this computer. These dynamic links are for local testing and cannot be scanned from another device.</p>' : ''}
-    <div class="library-summary"><div><strong>${number(live.length)}</strong><span>Saved codes</span></div><div><strong>${number(live.filter(r => r.kind === 'dynamic').length)}</strong><span>Dynamic connections</span></div><div><strong>${number(records.reduce((n, r) => n + r.totalScans, 0))}</strong><span>All-time recorded scans</span></div></div>
-    <div class="library-toolbar"><div class="filter-tabs" role="group" aria-label="Filter codes"><button data-filter="all" aria-pressed="true">All codes</button><button data-filter="dynamic" aria-pressed="false">Dynamic</button><button data-filter="static" aria-pressed="false">Static</button><button data-filter="archived" aria-pressed="false">Archived</button></div><label class="search-field"><span class="sr-only">Search your codes</span><input id="code-search" type="search" placeholder="Search by name or destination"></label></div><p id="result-count" class="sr-only" role="status"></p><div id="code-grid" class="code-grid"></div>`;
+  $('#workspace-content').innerHTML = `<div class="workspace-heading"><div><button class="text-button back-button" id="back-generator">← Back to generator</button><div class="eyebrow">YOUR CONNECTIONS, COLLECTED</div><h1 id="workspace-title">My QR Codes<span class="title-dot">.</span></h1><p>Find a code, update a destination, or see how it performs.</p></div><div class="workspace-actions"><button class="button-primary" id="new-dynamic">Create dynamic QR <span>↗</span></button></div></div>
+    ${account?.localPreview ? '<p class="preview-banner">Local test workspace · scan links open on this computer only.</p>' : ''}
+    <div class="library-summary"><div><strong>${number(live.length)}</strong><span>Saved codes</span></div><div><strong>${number(live.filter(r => r.kind === 'dynamic').length)}</strong><span>Dynamic codes</span></div><div><strong>${number(live.filter(r => r.kind === 'static').length)}</strong><span>Static codes</span></div></div>
+    <div class="library-toolbar"><div class="filter-tabs" role="group" aria-label="Filter codes"><button data-filter="all" aria-pressed="true">All codes</button><button data-filter="dynamic" aria-pressed="false">Dynamic</button><button data-filter="static" aria-pressed="false">Static</button><button data-filter="archived" aria-pressed="false">Archived</button></div><label class="search-field"><span class="sr-only">Search your codes</span><input id="code-search" type="search" placeholder="Search by name or destination"></label></div><p id="result-count" class="result-count" role="status"></p><div class="code-list-heading" aria-hidden="true"><span>Name & destination</span><span>Type</span><span>Status</span><span>Scans</span><span>Updated</span><span></span></div><div id="code-grid" class="code-list"></div>`;
   $('#back-generator').addEventListener('click', showEditor); $('#new-dynamic').addEventListener('click', () => void startDynamic(true));
-  $('#signout').addEventListener('click', async () => { try { await logout(); bridge.reset(); window.google?.accounts.id.disableAutoSelect(); bridge.toast('Signed out. Your saved codes will be here next time.'); } catch (error) { bridge.toast((error as Error).message); } });
   let filter = 'all';
   const update = () => {
     const search = $<HTMLInputElement>('#code-search').value.trim().toLowerCase();
     const found = records.filter(r => (filter === 'archived' ? r.status === 'archived' : r.status !== 'archived' && (filter === 'all' || r.kind === filter)) && `${r.name} ${r.destination || ''}`.toLowerCase().includes(search));
-    $('#result-count').textContent = `${found.length} codes`;
+    $('#result-count').textContent = `${found.length} ${found.length === 1 ? 'code' : 'codes'}${search ? ' matching your search' : ''}`;
     $('#code-grid').innerHTML = found.length ? found.map(card).join('') : `<div class="workspace-empty"><div class="empty-symbol">↗</div><h2>${records.length ? 'No codes here yet.' : 'Your next connection starts here.'}</h2><p>${records.length ? 'Try another filter or a different search.' : 'Create a dynamic QR to change destinations anytime, or save a static design from the generator.'}</p>${records.length ? '' : '<button class="button-primary" id="empty-create">Create your first dynamic QR ↗</button>'}</div>`;
     $('#empty-create')?.addEventListener('click', () => void startDynamic(true));
     document.querySelectorAll<HTMLElement>('[data-open]').forEach(el => el.addEventListener('click', () => {
       const code = records.find(r => r.id === el.dataset.open)!;
-      if (code.kind === 'dynamic') void showDetail(code); else { showEditor(); bridge.load(code); $('#generator').scrollIntoView({ behavior: 'smooth' }); }
+      if (code.kind === 'dynamic') void showDetail(code); else void openEditorRecord(code);
     }));
   };
   document.querySelectorAll<HTMLButtonElement>('[data-filter]').forEach(button => button.addEventListener('click', () => { filter = button.dataset.filter!; document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b === button))); update(); }));
   $('#code-search').addEventListener('input', update); update();
 }
-async function showDetail(code: QRRecord) {
+async function showDetail(code: QRRecord, focusId = '') {
+  const refreshing = selected?.id === code.id && !!document.querySelector('#analytics-ranges');
   selected = code; const current = ++sequence;
-  $('#workspace-content').innerHTML = '<p class="workspace-loading" role="status">Bringing your scans into focus…</p>';
+  if (!refreshing) $('#workspace-content').innerHTML = '<p class="workspace-loading" role="status">Bringing your scans into focus…</p>';
+  else { $('#workspace-content').setAttribute('aria-busy', 'true'); document.querySelectorAll<HTMLButtonElement>('[data-days], #refresh-analytics, #export-analytics').forEach(b => b.disabled = true); }
   try {
     const data = await api<{ analytics: Analytics; code: QRRecord }>(`/codes/${code.id}/analytics?days=${range}`);
     if (current !== sequence) return;
-    selected = data.code; renderDetail(data.code, data.analytics);
+    selected = data.code; renderDetail(data.code, data.analytics); $('#workspace-content').removeAttribute('aria-busy');
+    if (focusId) document.getElementById(focusId)?.focus();
   } catch (error) { if (current === sequence) showError(error, () => void showDetail(code)); }
 }
 function bars(title: string, rows: { label: string; count: number }[], total: number) {
@@ -195,27 +223,25 @@ function bars(title: string, rows: { label: string; count: number }[], total: nu
 function renderDetail(code: QRRecord, data: Analytics) {
   const max = Math.max(1, ...data.daily.map(d => d.scans)), step = 700 / data.days, width = Math.max(2, step * .65);
   const chart = data.daily.map((d, i) => `<rect x="${48 + step * i + (step - width) / 2}" y="${180 - d.scans / max * 150}" width="${width}" height="${Math.max(d.scans ? 3 : 1, d.scans / max * 150)}" rx="2" fill="${d.scans ? '#161616' : '#eaeaea'}"><title>${d.day}: ${d.scans} scans, ${d.visitors} estimated visitors</title></rect>`).join('');
-  $('#workspace-content').innerHTML = `<button class="text-button back-button" id="back-library">← All my QR codes</button><div class="workspace-heading detail-heading"><div><div class="detail-badges"><span class="kind-badge dynamic">↗ Dynamic QR</span><span class="state-badge ${code.status}">${code.status}</span></div><h1 id="workspace-title">${escape(code.name)}</h1><p>One permanent code. A destination that moves with you.</p></div><div class="workspace-actions"><button class="button-primary" id="edit-code">Edit & download <span>↗</span></button><button class="text-button" id="refresh-analytics">Refresh analytics</button></div></div>
-    <div class="destination-panel"><div class="detail-preview">${buildSVG(code.payload, code.design, 120)}</div><div class="destination-info"><span class="field-label">PERMANENT SCAN LINK</span><div class="scan-link"><span>${escape(code.scanUrl!)}</span><button class="text-button" id="copy-scan">Copy link</button></div><span class="destination-arrow">↳ Takes people to</span><p>${escape(code.destination!)}</p></div><div class="destination-actions"><button class="button-secondary" id="change-destination">Change destination</button><button class="text-button" id="toggle-code">${code.status === 'active' ? 'Pause code' : 'Activate code'}</button><button class="text-button danger-text" id="archive-code" ${code.status === 'archived' ? 'hidden' : ''}>Archive</button></div></div>
+  $('#workspace-content').innerHTML = `<button class="text-button back-button" id="back-library">← All my QR codes</button><div class="workspace-heading detail-heading"><div><div class="detail-badges"><span class="kind-badge dynamic">↗ Dynamic QR</span><span class="state-badge ${code.status}">${code.status}</span></div><h1 id="workspace-title">${escape(code.name)}</h1><p>One permanent code. A destination that moves with you.</p></div><div class="workspace-actions"><button class="button-primary" id="edit-code">${actionIcon('edit')}<span>Edit & download</span></button><button class="subtle-button" id="refresh-analytics">${actionIcon('refresh')}<span>Refresh</span></button></div></div>
+    <div class="destination-panel"><div class="detail-preview">${buildSVG(code.payload, code.design, 120)}</div><div class="destination-info"><span class="field-label">PERMANENT SCAN LINK</span><div class="scan-link"><span>${escape(code.scanUrl!)}</span><button class="icon-button" id="copy-scan" aria-label="Copy scan link" title="Copy scan link">${actionIcon('copy')}</button></div><span class="destination-arrow">↳ Takes people to</span><p>${escape(code.destination!)}</p></div><div class="destination-actions"><button class="button-secondary" id="change-destination">${actionIcon('edit')}<span>Change destination</span></button><button class="subtle-button" id="toggle-code">${actionIcon(code.status === 'active' ? 'pause' : 'play')}<span>${code.status === 'active' ? 'Pause code' : 'Activate code'}</span></button><button class="subtle-button danger-text" id="archive-code" ${code.status === 'archived' ? 'hidden' : ''}>${actionIcon('archive')}<span>Archive</span></button></div></div>
     ${code.status !== 'active' ? `<p class="preview-banner">This code is ${code.status}. Scanners will not be redirected until you activate it.</p>` : ''}
-    <div class="analytics-heading"><div><h2>A closer look at your scans.</h2><p class="workspace-muted">Recorded requests, with known automated traffic separated.</p></div><div class="analytics-controls"><label class="sr-only" for="analytics-range">Analytics date range</label><select id="analytics-range"><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option></select><button class="button-secondary" id="export-analytics">Export CSV ↓</button></div></div>
+    <div class="analytics-heading"><div><h2>A closer look at your scans.</h2><p class="workspace-muted">Recorded requests, with known automated traffic separated.</p></div><div class="analytics-controls"><div class="analytics-range-control"><span>Last</span><div id="analytics-ranges" class="range-tabs" role="group" aria-label="Analytics date range">${[7,30,90].map(days => `<button id="range-${days}" data-days="${days}" aria-pressed="${days === range}">${days} days</button>`).join('')}</div></div><button class="button-secondary" id="export-analytics">${actionIcon('download')}<span>Export CSV</span></button></div></div>
     <div class="analytics-metrics"><div><span>Scans</span><strong>${number(data.scans)}</strong><small>Excludes recognized bots</small></div><div><span>Estimated visitors</span><strong>${number(data.visitors)}</strong><small>Approximate devices, not people</small></div><div><span>Automated requests</span><strong>${number(data.automated)}</strong><small>Recognized bots & previews</small></div><div><span>All-time scans</span><strong>${number(code.totalScans)}</strong><small>${code.lastScanAt ? `Last scan ${date(code.lastScanAt)}` : 'Ready for your first scan'}</small></div></div>
     <section class="scan-chart"><div><h3>Scans over time</h3><span>Daily · UTC</span></div>${data.scans ? '' : '<p class="chart-empty">Nothing to chart just yet. Share your code to start the story.</p>'}<svg viewBox="0 0 780 225" role="img" aria-label="Daily scans for the last ${data.days} days; ${data.scans} total. Daily values are in the table below."><path d="M48 30H748M48 105H748M48 180H748" stroke="#eeeeee" stroke-width="1"/><text x="34" y="34" text-anchor="end">${max}</text><text x="34" y="184" text-anchor="end">0</text>${chart}<text x="48" y="210">${date(data.daily[0].day)}</text><text x="748" y="210" text-anchor="end">${date(data.daily.at(-1)!.day)}</text></svg><details class="daily-table"><summary>View daily numbers</summary><div class="table-scroll"><table><thead><tr><th>Date (UTC)</th><th>Scans</th><th>Estimated visitors</th></tr></thead><tbody>${data.daily.map(d => `<tr><td>${d.day}</td><td>${d.scans}</td><td>${d.visitors}</td></tr>`).join('')}</tbody></table></div></details></section>
-    <div class="breakdown-grid">${bars('Devices', data.devices, data.scans)}${bars('Browsers', data.browsers, data.scans)}${bars('Countries', data.countries, data.scans)}${bars('Referring websites', data.referrers, data.scans)}</div><p class="analytics-footnote">A scan is a recorded redirect request; repeat visits count again. Estimated visitors use a code-specific hash of network address and browser information. Shared networks, privacy tools, and unrecognized bots can affect accuracy. Countries appear only when supplied by trusted hosting infrastructure. Referrers are often unavailable for camera scans. Detailed events are retained for 90 days; all-time counts remain. No raw IP addresses or full browser identifiers are stored in scan analytics.</p>`;
+    <div class="breakdown-grid">${bars('Devices', data.devices, data.scans)}${bars('Browsers', data.browsers, data.scans)}${bars('Countries', data.countries, data.scans)}${bars('Referring websites', data.referrers, data.scans)}</div><details class="analytics-notes"><summary>How analytics are counted</summary><p class="analytics-footnote">A scan is a recorded redirect request; repeat visits count again. Estimated visitors use a code-specific hash of network address and browser information. Shared networks, privacy tools, and unrecognized bots can affect accuracy. Countries appear only when supplied by trusted hosting infrastructure. Referrers are often unavailable for camera scans. Detailed events are retained for 90 days; all-time counts remain. No raw IP addresses or full browser identifiers are stored in scan analytics.</p></details>`;
   $('#back-library').addEventListener('click', () => void showLibrary());
-  const edit = () => { showEditor(); bridge.load(code); $('#generator').scrollIntoView({ behavior: 'smooth' }); };
-  $('#edit-code').addEventListener('click', edit); $('#change-destination').addEventListener('click', () => { edit(); $('#field-url').focus(); });
-  $('#refresh-analytics').addEventListener('click', () => void showDetail(code));
-  $<HTMLSelectElement>('#analytics-range').value = String(range);
-  $('#analytics-range').addEventListener('change', e => { range = Number((e.target as HTMLSelectElement).value); void showDetail(code); });
-  $('#copy-scan').addEventListener('click', async () => { try { await navigator.clipboard.writeText(code.scanUrl!); bridge.toast('Permanent scan link copied.'); } catch { bridge.toast('Could not copy. Select the scan link above to copy it.'); } });
+  $('#edit-code').addEventListener('click', () => void openEditorRecord(code)); $('#change-destination').addEventListener('click', async () => { if (await openEditorRecord(code)) $('#field-url').focus(); });
+  $('#refresh-analytics').addEventListener('click', () => void showDetail(code, 'refresh-analytics'));
+  document.querySelectorAll<HTMLButtonElement>('[data-days]').forEach(button => button.addEventListener('click', () => { range = Number(button.dataset.days); void showDetail(code, button.id); }));
+  $('#copy-scan').addEventListener('click', async () => { try { await navigator.clipboard.writeText(code.scanUrl!); const button = $('#copy-scan'); button.innerHTML = actionIcon('check'); button.setAttribute('aria-label', 'Scan link copied'); button.title = 'Copied'; setTimeout(() => { if (button.isConnected) { button.innerHTML = actionIcon('copy'); button.setAttribute('aria-label', 'Copy scan link'); button.title = 'Copy scan link'; } }, 2000); bridge.toast('Permanent scan link copied.'); } catch { bridge.toast('Could not copy. Select the scan link above to copy it.'); } });
   $('#export-analytics').addEventListener('click', () => exportCSV(code, data));
   $('#toggle-code').addEventListener('click', () => void changeStatus(code, code.status === 'active' ? 'paused' : 'active'));
   $('#archive-code').addEventListener('click', () => void changeStatus(code, 'archived'));
 }
 async function confirm(title: string, description: string, action: string) {
   $('#confirm-title').textContent = title; $('#confirm-description').textContent = description; $('#confirm-yes').textContent = action;
-  const dialog = $<HTMLDialogElement>('#confirm-dialog'); dialog.showModal();
+  const dialog = $<HTMLDialogElement>('#confirm-dialog'); if (dialog.open) return false; dialog.showModal();
   return new Promise<boolean>(resolve => {
     let agreed = false;
     const yes = () => { agreed = true; dialog.close(); }, no = () => dialog.close();

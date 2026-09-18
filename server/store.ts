@@ -5,6 +5,7 @@ import type { QRRecord, Analytics, Account } from '../src/models.ts';
 export interface CodeDoc extends Omit<QRRecord, 'createdAt' | 'updatedAt' | 'lastScanAt'> {
   _id: string; ownerId: string; createdAt: Date; updatedAt: Date; lastScanAt: Date | null; requestKey: string;
 }
+export interface LogoDoc { _id: string; ownerId: string; name: string; digest: string; image: string; thumbnail: string; createdAt: Date }
 interface EventDoc {
   _id: string; codeId: string; at: Date; expiresAt: Date; visitor: string; automated: boolean;
   device: string; browser: string; country: string; referrer: string;
@@ -13,15 +14,19 @@ export interface SessionDoc { _id: string; account: Account; expiresAt: Date }
 export interface ChallengeDoc { _id: string; nonce: string; expiresAt: Date }
 export class Store {
   codes: Collection<CodeDoc>;
+  logos: Collection<LogoDoc>;
   events: Collection<EventDoc>;
   sessions: Collection<SessionDoc>;
   challenges: Collection<ChallengeDoc>;
   constructor(public db: Db) {
+    this.logos = db.collection<LogoDoc>('logos');
     this.codes = db.collection<CodeDoc>('qr_codes'); this.events = db.collection<EventDoc>('scan_events');
     this.sessions = db.collection<SessionDoc>('sessions'); this.challenges = db.collection<ChallengeDoc>('login_challenges');
   }
   async initialize() {
     await Promise.all([
+      this.logos.createIndex({ ownerId: 1, digest: 1 }, { unique: true }),
+      this.logos.createIndex({ ownerId: 1, createdAt: -1 }),
       this.codes.createIndex({ ownerId: 1, updatedAt: -1 }),
       this.codes.createIndex({ ownerId: 1, requestKey: 1 }, { unique: true }),
       this.codes.createIndex({ slug: 1 }, { unique: true, partialFilterExpression: { kind: 'dynamic' } }),

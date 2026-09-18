@@ -5,8 +5,9 @@ if (configured && new URL(configured).origin !== configured) throw new Error('Th
 let token = '';
 try { token = sessionStorage.getItem('fynd-qr-session') || ''; } catch { /* Storage may be disabled. */ }
 export let account: Account | null = null;
-let change: () => void = () => {};
-export function onAccountChange(callback: () => void) { change = callback; }
+const listeners = new Set<() => void>();
+const change = () => listeners.forEach(listener => listener());
+export function onAccountChange(callback: () => void) { listeners.add(callback); return () => listeners.delete(callback); }
 export class RequestError extends Error { constructor(public status: number, message: string) { super(message); } }
 export async function api<T>(path: string, options: { method?: string; body?: unknown; key?: string; referrerHost?: string; anonymous?: boolean } = {}): Promise<T> {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
@@ -18,7 +19,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
     });
     const data = await response.json().catch(() => null);
     if (response.status === 401) clearSession();
-    if (!response.ok || !data) throw new RequestError(response.status, data?.error || 'Account features are unavailable right now. Your static QR generator still works.');
+    if (!response.ok || !data) throw new RequestError(response.status, data?.error || 'The account service is unavailable right now. Please try again shortly.');
     return data;
   } catch (error) {
     if (error instanceof RequestError) throw error;

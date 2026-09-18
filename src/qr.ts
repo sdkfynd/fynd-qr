@@ -3,7 +3,7 @@ import { BODY_SHAPES, FRAME_SHAPES, BALL_SHAPES, renderBody, renderEyeFrame, ren
 
 export type ContentType = 'url' | 'text' | 'wifi' | 'email' | 'phone' | 'sms' | 'contact';
 export type Pattern = BodyShape;
-export interface Design { foreground: string; background: string; pattern: BodyShape; eyeFrame?: EyeFrame; eyeBall?: EyeBall; eyeFrameColor?: string; eyeBallColor?: string; logo?: string }
+export interface Design { foreground: string; background: string; pattern: BodyShape; eyeFrame?: EyeFrame; eyeBall?: EyeBall; eyeFrameColor?: string; eyeBallColor?: string; logo?: string; logoSize?: number }
 export const DEFAULT_DESIGN: Design = { foreground: '#173d38', background: '#ffffff', pattern: 'square', eyeFrame: 'square', eyeBall: 'square' };
 export const MAX_BYTES = 1200;
 export type ColorKey = 'foreground' | 'background' | 'eyeFrameColor' | 'eyeBallColor';
@@ -67,6 +67,7 @@ function luminance(hex: string): number {
   return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
 }
 export function validateDesign(design: Design): number {
+  if (design.logoSize !== undefined && (!Number.isFinite(design.logoSize) || design.logoSize < 10 || design.logoSize > 18)) throw new Error('Keep logo size between 10% and 18% for a clear scan.');
   if (!BODY_SHAPES.some(s => s.id === design.pattern) || !FRAME_SHAPES.some(s => s.id === (design.eyeFrame ?? 'square')) || !BALL_SHAPES.some(s => s.id === (design.eyeBall ?? 'square'))) throw new Error('Choose one of the available QR shapes.');
   const colors = [design.foreground, design.background, design.eyeFrameColor ?? design.foreground, design.eyeBallColor ?? design.foreground];
   const keys: ColorKey[] = ['foreground','background','eyeFrameColor','eyeBallColor'];
@@ -88,7 +89,9 @@ export function recommendedPngSize(payload: string): number {
 export function buildSVG(payload: string, design: Design, pixels = 1024): string {
   validateDesign(design);
   if (new TextEncoder().encode(payload).length > MAX_BYTES) throw new Error('Shorten your content to 1,200 bytes or less.');
-  const qr = QRCode.create(payload, { errorCorrectionLevel: 'H' });
+  let qr = QRCode.create(payload, { errorCorrectionLevel: 'H' });
+  // Give short payloads enough modules to keep the center artwork legible and decodable.
+  if (design.logo && qr.version < 4) qr = QRCode.create(payload, { errorCorrectionLevel: 'H', version: 4 });
   const n = qr.modules.size, total = n + 8;
   const safePixels = Math.min(4096, Math.max(256, Math.round(pixels)));
   const parts = [`<svg xmlns="http://www.w3.org/2000/svg" width="${safePixels}" height="${safePixels}" viewBox="0 0 ${total} ${total}"><rect width="${total}" height="${total}" fill="${design.background}"/><g fill="${design.foreground}">`];
@@ -107,9 +110,13 @@ export function buildSVG(payload: string, design: Design, pixels = 1024): string
     parts.push(`<g fill="${design.eyeBallColor ?? design.foreground}">${renderEyeBall(design.eyeBall ?? 'square',x+2,y+2)}</g>`);
   }
   if (design.logo && /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(design.logo)) {
-    const logoSize = Math.max(3, Math.floor(n * .14)), plate = logoSize + 1.5;
+    const logoSize = n * ((design.logoSize ?? 14) / 100);
+    // Clear complete modules, with an even margin around the centered artwork.
+    // This avoids the clipped dark fragments left by a rounded overlay.
+    const plateStart = Math.floor((total - logoSize - 1) / 2);
+    const plate = total - 2 * plateStart;
     const pos = (total - logoSize) / 2;
-    parts.push(`<rect x="${(total - plate) / 2}" y="${(total - plate) / 2}" width="${plate}" height="${plate}" rx=".5" fill="${design.background}"/><image href="${design.logo}" x="${pos}" y="${pos}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet"/>`);
+    parts.push(`<rect x="${(total - plate) / 2}" y="${(total - plate) / 2}" width="${plate}" height="${plate}" fill="${design.background}"/><image href="${design.logo}" x="${pos}" y="${pos}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet"/>`);
   }
   parts.push('</svg>');
   return parts.join('');

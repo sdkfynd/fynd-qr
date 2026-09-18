@@ -158,17 +158,51 @@ test('expired account sessions are rejected even before Mongo TTL cleanup', asyn
 test('page scan referrers describe the referring site, not the API page or private URL', async () => {
   const code = await create('Page referral');
   await app.inject({ url: `/api/resolve/${code.slug}`, headers: { origin, referer: `${origin}/`, 'x-qr-referrer': 'news.example.org', 'user-agent': 'Mozilla/5.0' } });
+  assert.equal((await db.store.events.findOne({ codeId: code.id }))?.referrer, 'news.example.org');
   await app.inject({ url: `/api/resolve/${code.slug}`, headers: { origin, referer: `${origin}/`, 'x-qr-referrer': 'https://private.example.org/path?secret=value', 'user-agent': 'Mozilla/5.0' } });
   const events = await db.store.events.find({ codeId: code.id }).sort({ at: 1 }).toArray();
-  assert.deepEqual(events.map(e => e.referrer), ['news.example.org', 'Direct / unknown']);
+  assert.deepEqual(events.map(e => e.referrer).sort(), ['Direct / unknown', 'news.example.org']);
 });
 test('country information is ignored when the request bypasses the trusted proxy', async () => {
   const code = await create('Country boundary');
   const proxied = await buildApp({ ...config, trustProxy: ['127.0.0.1'], countryHeader: 'x-country' }, db.store);
   try {
     await proxied.inject({ url: `/r/${code.slug}`, headers: { 'x-country': 'IN', 'x-forwarded-for': '203.0.113.10' }, remoteAddress: '8.8.8.8' });
+    assert.equal((await db.store.events.findOne({ codeId: code.id }))?.country, 'Unknown');
     await proxied.inject({ url: `/r/${code.slug}`, headers: { 'x-country': 'IN', 'x-forwarded-for': '203.0.113.10' }, remoteAddress: '127.0.0.1' });
     const events = await db.store.events.find({ codeId: code.id }).sort({ at: 1 }).toArray();
-    assert.deepEqual(events.map(e => e.country), ['Unknown', 'IN']);
+    assert.deepEqual(events.map(e => e.country).sort(), ['IN', 'Unknown']);
   } finally { await proxied.close(); }
+});
+
+test('logo uploads are canonicalized, private, reusable, and deduplicated', async () => {
+  const sharp = (await import('sharp')).default;
+  const image = `data:image/png;base64,${(await sharp({ create: { width: 240, height: 240, channels: 4, background: '#246080' } }).png().toBuffer()).toString('base64')}`;
+  const upload = () => app.inject({ method: 'POST', url: '/api/logos', headers: headers(), payload: { name: 'Test logo', image } });
+  const [a, b] = await Promise.all([upload(), upload()]);
+  assert.ok([200, 201].includes(a.statusCode), a.body); assert.ok([200, 201].includes(b.statusCode), b.body);
+  assert.equal(a.json().logo.id, b.json().logo.id); assert.equal(await db.store.logos.countDocuments({ ownerId: 'alice' }), 1);
+  const id = a.json().logo.id;
+  const listed = (await app.inject({ url: '/api/logos', headers: headers() })).json().logos;
+  assert.equal(listed.length, 1); assert.equal('image' in listed[0], false); assert.equal('ownerId' in listed[0], false);
+  const thumbnail = await sharp(Buffer.from(listed[0].thumbnail.split(',')[1], 'base64')).metadata(); assert.equal(thumbnail.width, 96);
+  const saved = (await app.inject({ url: `/api/logos/${id}`, headers: headers() })).json().logo;
+  assert.ok(saved.image.startsWith('data:image/png;base64,'));
+  assert.deepEqual((await app.inject({ url: '/api/logos', headers: headers(tokenB) })).json().logos, []);
+  assert.equal((await app.inject({ url: `/api/logos/${id}`, headers: headers(tokenB) })).statusCode, 404);
+  assert.equal((await app.inject({ url: '/api/logos' })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/logos', headers: { origin }, payload: { name: 'No account', image } })).statusCode, 401);
+  const code = { ...draft('Logo size persists'), design: { ...DEFAULT_DESIGN, logo: saved.image, logoSize: 18 } };
+  const createWithLogo = await app.inject({ method: 'POST', url: '/api/codes', headers: { ...headers(), 'idempotency-key': randomBytes(16).toString('hex') }, payload: code });
+  assert.equal(createWithLogo.statusCode, 201, createWithLogo.body); assert.equal(createWithLogo.json().code.design.logoSize, 18);
+});
+test('malformed images, oversized dimensions and unsafe sizes are rejected', async () => {
+  const sharp = (await import('sharp')).default;
+  const oversized = `data:image/png;base64,${(await sharp({ create: { width: 241, height: 241, channels: 4, background: '#000000' } }).png().toBuffer()).toString('base64')}`;
+  for (const image of ['data:image/png;base64,aGVsbG8=', 'data:image/svg+xml;base64,PHN2Zz4=', oversized]) {
+    const response = await app.inject({ method: 'POST', url: '/api/logos', headers: headers(), payload: { name: 'Invalid', image } });
+    assert.equal(response.statusCode, 400, response.body);
+  }
+  const invalid = await app.inject({ method: 'POST', url: '/api/codes', headers: { ...headers(), 'idempotency-key': randomBytes(16).toString('hex') }, payload: { ...draft('Invalid size'), design: { ...DEFAULT_DESIGN, logoSize: 90 } } });
+  assert.equal(invalid.statusCode, 400);
 });

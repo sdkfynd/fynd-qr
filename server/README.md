@@ -37,6 +37,12 @@ For direct server redirects, leave `SCAN_PAGE_URL` empty. Newly created codes th
 - Daily charts and 7/30/90-day ranges use UTC. Analytics writes are best effort and cannot make a redirect fail; event and all-time counter updates are separate Mongo operations, so partial failures can produce discrepancies. Monitor write failures. Do not treat these metrics as billing-grade accounting.
 - Country headers are accepted only with configured proxy trust and a forwarded client chain. The deployment must block direct access around the trusted proxy and have the proxy overwrite the country header. Without this setup, leave both proxy options unset. Never trust arbitrary forwarded IPs from the internet.
 
+## Private logo library
+
+Signed-in custom uploads automatically save to the owner’s `logos` collection. The browser normalizes PNG/JPG/WebP to a 240px PNG and trims transparent outer padding. The backend checks and decodes the PNG with bounded pixel input, re-encodes it without metadata, and produces a 96px list thumbnail. Full images are retrieved through an authenticated owner-scoped endpoint. Identical canonical images are deduplicated per owner, including concurrent duplicate requests. Built-in presets do not create library entries.
+
+The library has a nominal 100-logo cap and a 20-upload/minute route limit; the count check is not transactional for different simultaneous uploads. If library saving fails, the current QR still uses the uploaded image and the UI offers retry. Logo size is validated at 10–18% of module width, with high QR error correction and whole-module background clearing. Short payloads use at least QR version 4 when a logo is present. Physical scan verification is still necessary for the final design and print.
+
 ## Launch dependencies still required
 
 A real Google OAuth client, a production MongoDB connection, an HTTPS backend host, a decision on approved destinations, infrastructure monitoring/backups, and end-to-end Google/phone verification. URL reputation scanning, formal acceptable-use/legal review and a user-facing abuse-reporting process have not been provisioned. Local test data is not production data. No cloud project or paid deployment is created by the local scripts.

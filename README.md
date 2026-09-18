@@ -1,6 +1,6 @@
 # Fynd QR
 
-A QR creator using the existing Fynd design system, with a local P2 pilot for Google work sign-in, saved codes, dynamic destinations and scan analytics. Static content types and exports are preserved. There are twelve body, eye-frame and eye-ball choices.
+A QR creator using the existing Fynd design system, with a local P2 pilot for Google work sign-in, saved codes, dynamic destinations and scan analytics. Static content types and exports are preserved. There are twelve body, eye-frame and eye-ball choices. A compact saved-code list separates static designs from dynamic analytics. Uploaded logos automatically save to a private My logos library; the editor includes a 10–18% size slider and transparent-padding cleanup.
 
 ## Try the local pilot
 
