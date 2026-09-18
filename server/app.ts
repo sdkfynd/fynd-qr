@@ -6,7 +6,7 @@ import { OAuth2Client, type TokenPayload } from 'google-auth-library';
 import { z } from 'zod';
 import type { Account } from '../src/models.ts';
 import type { Config } from './config.ts';
-import { Store, type CodeDoc } from './store.ts';
+import type { QRStore, CodeDoc, CodePatch } from './repository.ts';
 import { registerLogoRoutes, normalizeStoredLogo } from './logos.ts';
 import { APIError, parseDraft } from './validation.ts';
 
@@ -37,7 +37,7 @@ function scanMetadata(request: FastifyRequest, config: Config, id: string, pageS
 function scanError(title: string, message: string) {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Fynd QR</title><style>body{margin:0;font:16px/1.6 system-ui;background:#f8f8f9;color:#242424;min-height:100vh;display:grid;place-items:center}main{max-width:420px;padding:40px}b{font-size:22px}h1{font-size:30px;line-height:1.2}p{color:#656565}</style><main><b>Fynd QR</b><h1>${title}</h1><p>${message}</p></main></html>`;
 }
-export async function buildApp(config: Config, store: Store, verifyGoogle?: (credential: string) => Promise<TokenPayload | undefined>) {
+export async function buildApp(config: Config, store: QRStore, verifyGoogle?: (credential: string) => Promise<TokenPayload | undefined>) {
   const app = Fastify({ logger: false, trustProxy: config.trustProxy, bodyLimit: 420_000, exposeHeadRoutes: false, requestTimeout: 10_000 });
   await app.register(cors, { origin: config.origins, methods: ['GET', 'POST', 'PATCH', 'DELETE'], allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key', 'X-QR-Referrer'] });
   await app.register(rateLimit, { global: true, max: 240, timeWindow: '1 minute' });
@@ -64,28 +64,28 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
   }
   async function account(request: FastifyRequest) {
     const match = /^Bearer ([a-f\d]{64})$/i.exec(request.headers.authorization || '');
-    const session = match && await store.sessions.findOne({ _id: hash(match[1]), expiresAt: { $gt: new Date() } });
+    const session = match && await store.getSession(hash(match[1]));
     if (!session || (config.production && session.account.localPreview)) throw new APIError(401, 'Please sign in to continue. Your current design is still here.');
     return session.account;
   }
   async function owned(request: FastifyRequest) {
     const user = await account(request); const { id } = request.params as { id: string };
-    const code = /^[a-f\d]{24}$/.test(id) && await store.codes.findOne({ _id: id, ownerId: user.id });
+    const code = /^[a-f\d]{24}$/.test(id) && await store.getCode(id, user.id);
     if (!code) throw new APIError(404, 'This code could not be found in your account.');
     return code;
   }
   async function session(user: Account) {
     const token = randomBytes(32).toString('hex');
-    await store.sessions.insertOne({ _id: hash(token), account: user, expiresAt: new Date(Date.now() + 12 * 3600_000) });
+    await store.saveSession({ _id: hash(token), account: user, expiresAt: new Date(Date.now() + 12 * 3600_000) });
     return { token, account: user };
   }
   registerLogoRoutes(app, store, account);
-  app.get('/health', async () => { await store.db.command({ ping: 1 }); return { status: 'ok' }; });
+  app.get('/health', async () => { await store.health(); return { status: 'ok' }; });
   app.get('/api/config', async () => ({ googleClientId: config.googleClientId, localPreview: config.localPreview, scanBase: config.scanBase }));
   app.post('/api/auth/challenge', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async () => {
     if (!config.googleClientId) throw new APIError(503, 'Google sign-in is not configured yet.');
     const id = hexId(), nonce = randomBytes(24).toString('hex');
-    await store.challenges.insertOne({ _id: id, nonce, expiresAt: new Date(Date.now() + 5 * 60_000) });
+    await store.saveChallenge({ _id: id, nonce, expiresAt: new Date(Date.now() + 5 * 60_000) });
     return { id, nonce };
   });
   app.post('/api/auth/google', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async request => {
@@ -96,7 +96,7 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     catch { throw new APIError(401, 'Google sign-in expired or could not be verified. Please try again.'); }
     const user = companyAccount(payload);
     const nonce = (payload as TokenPayload & { nonce?: string }).nonce;
-    if (!nonce || !await store.challenges.findOneAndDelete({ _id: parsed.data.challengeId, nonce, expiresAt: { $gt: new Date() } })) throw new APIError(401, 'This sign-in request expired. Please try again.');
+    if (!nonce || !await store.consumeChallenge(parsed.data.challengeId, nonce)) throw new APIError(401, 'This sign-in request expired. Please try again.');
     return session(user);
   });
   if (config.localPreview) app.post('/api/auth/local-preview', async request => {
@@ -105,24 +105,24 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
   });
   app.get('/api/me', async request => ({ account: await account(request) }));
   app.post('/api/auth/logout', async request => {
-    await account(request); await store.sessions.deleteOne({ _id: hash(request.headers.authorization!.slice(7)) }); return { ok: true };
+    await account(request); await store.deleteSession(hash(request.headers.authorization!.slice(7))); return { ok: true };
   });
   app.get('/api/codes', async request => {
     const user = await account(request);
-    return { codes: (await store.codes.find({ ownerId: user.id }).sort({ updatedAt: -1 }).limit(501).toArray()).map(code => store.view(code)) };
+    return { codes: (await store.listCodes(user.id)).map(code => store.view(code)) };
   });
   app.post('/api/codes', { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } }, async (request, reply) => {
     const user = await account(request); const key = String(request.headers['idempotency-key'] || '');
     if (!/^[a-z\d-]{16,80}$/i.test(key)) throw new APIError(400, 'A unique save request is required.');
-    const existing = await store.codes.findOne({ ownerId: user.id, requestKey: key });
+    const existing = await store.getCodeByRequest(user.id, key);
     if (existing) return { code: store.view(existing) };
     const { draft, payload, destination } = await checkedDraft(request.body);
-    if (await store.codes.countDocuments({ ownerId: user.id }) >= 500) throw new APIError(409, 'Your account has reached its 500-code limit.');
+    if (await store.countCodes(user.id) >= 500) throw new APIError(409, 'Your account has reached its 500-code limit.');
     const id = hexId(), slug = draft.kind === 'dynamic' ? randomBytes(9).toString('base64url') : null, now = new Date();
     const scanUrl = slug ? (config.scanPage ? `${config.scanPage}#r/${slug}` : `${config.scanBase}/r/${slug}`) : null;
     const code: CodeDoc = { ...draft, id, _id: id, ownerId: user.id, requestKey: key, slug, scanUrl, destination, payload: scanUrl || payload, status: 'active', createdAt: now, updatedAt: now, lastScanAt: null, totalScans: 0, revision: 1 };
-    try { await store.codes.insertOne(code); } catch (error) {
-      const concurrent = await store.codes.findOne({ ownerId: user.id, requestKey: key });
+    try { await store.insertCode(code); } catch (error) {
+      const concurrent = await store.getCodeByRequest(user.id, key);
       if (concurrent) return { code: store.view(concurrent) }; throw error;
     }
     reply.code(201); return { code: store.view(code) };
@@ -131,14 +131,14 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     const code = await owned(request);
     const parsed = z.object({ revision: z.number().int().positive(), draft: z.unknown().optional(), status: z.enum(['active', 'paused', 'archived']).optional() }).strict().safeParse(request.body);
     if (!parsed.success || (parsed.data.draft === undefined && !parsed.data.status)) throw new APIError(400, 'Choose a change to save.');
-    const patch: Partial<CodeDoc> = { updatedAt: new Date() };
+    const patch: CodePatch = { updatedAt: new Date() };
     if (parsed.data.draft) {
       const { draft, payload, destination } = await checkedDraft(parsed.data.draft);
       if (draft.kind !== code.kind) throw new APIError(400, 'A saved code cannot change between static and dynamic.');
       Object.assign(patch, draft, { destination, payload: code.scanUrl || payload });
     }
     if (parsed.data.status) patch.status = parsed.data.status;
-    const updated = await store.codes.findOneAndUpdate({ _id: code.id, ownerId: code.ownerId, revision: parsed.data.revision }, { $set: patch, $inc: { revision: 1 } }, { returnDocument: 'after' });
+    const updated = await store.updateCode(code.id, code.ownerId, parsed.data.revision, patch);
     if (!updated) throw new APIError(409, 'This code changed in another tab. Reopen it from My QR Codes before saving.');
     return { code: store.view(updated) };
   });
@@ -152,7 +152,7 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
   app.get('/api/resolve/:slug', { config: { rateLimit: false } }, async request => {
     const { slug } = request.params as { slug: string };
     if (!/^[A-Za-z\d_-]{12}$/.test(slug)) throw new APIError(404, 'This QR link is incomplete.');
-    const code = await store.codes.findOne({ slug, kind: 'dynamic' }, { maxTimeMS: 2500 });
+    const code = await store.getCodeBySlug(slug);
     if (!code || code.status === 'archived') throw new APIError(404, 'This code is no longer available. Contact the person who shared it.');
     if (code.status !== 'active') throw new APIError(410, 'The owner has paused this code. Please check with them for the latest link.');
     try { await store.recordScan(code, scanMetadata(request, config, code.id, true)); } catch { console.error('Scan analytics write failed; destination preserved.'); }
@@ -162,7 +162,7 @@ export async function buildApp(config: Config, store: Store, verifyGoogle?: (cre
     const { slug } = request.params as { slug: string };
     if (!/^[A-Za-z\d_-]{12}$/.test(slug)) return reply.code(404).type('text/html').send(scanError('Code not found', 'Check the link or ask the person who shared this QR code.'));
     let code: CodeDoc | null;
-    try { code = await store.codes.findOne({ slug, kind: 'dynamic' }, { maxTimeMS: 2500 }); }
+    try { code = await store.getCodeBySlug(slug); }
     catch { return reply.code(503).header('Retry-After', '30').type('text/html').send(scanError('A brief pause', 'We could not open this link right now. Please try again in a moment.')); }
     if (!code || code.status === 'archived') return reply.code(404).type('text/html').send(scanError('Code unavailable', 'This QR code is no longer available. Please contact the person who shared it.'));
     if (code.status !== 'active') return reply.code(410).type('text/html').send(scanError('This code is paused', 'The owner has temporarily paused this QR code. Please check with them for the latest link.'));

@@ -14,7 +14,7 @@ await mkdir('.local-data/mongo', { recursive: true });
 const secretFile = '.local-data/analytics-secret';
 if (!existsSync(secretFile)) writeFileSync(secretFile, randomBytes(32).toString('hex'), { mode: 0o600 });
 const mongod = await MongoMemoryServer.create({ instance: { ip: '127.0.0.1', dbPath: resolve('.local-data/mongo'), storageEngine: 'wiredTiger' } });
-const config = readConfig({ ...process.env, NODE_ENV: 'development', API_HOST: '127.0.0.1', PORT: String(apiPort), SCAN_BASE_URL: `http://localhost:${apiPort}`, APP_ORIGINS: `http://localhost:${webPort},http://127.0.0.1:${webPort}`, MONGODB_URI: mongod.getUri(), LOCAL_PREVIEW_AUTH: '1', SCAN_PAGE_URL: `http://localhost:${webPort}/`, ANALYTICS_SECRET: readFileSync(secretFile, 'utf8') });
+const config = readConfig({ ...process.env, NODE_ENV: 'development', API_HOST: '127.0.0.1', PORT: String(apiPort), SCAN_BASE_URL: `http://localhost:${apiPort}`, APP_ORIGINS: `http://localhost:${webPort},http://127.0.0.1:${webPort}`, MONGODB_URI: mongod.getUri(), DATABASE_URL: '', LOCAL_PREVIEW_AUTH: '1', SCAN_PAGE_URL: `http://localhost:${webPort}/`, ANALYTICS_SECRET: readFileSync(secretFile, 'utf8') });
 const { client, store } = await connectStore(config.mongoUri, config.database);
 const app = await buildApp(config, store);
 await app.listen({ host: config.host, port: config.port });

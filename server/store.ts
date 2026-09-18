@@ -1,18 +1,10 @@
 import { MongoClient, type Db, type Collection } from 'mongodb';
 import { randomBytes } from 'node:crypto';
-import type { QRRecord, Analytics, Account } from '../src/models.ts';
+import type { Analytics } from '../src/models.ts';
+import { codeView, type QRStore, type CodeDoc, type LogoDoc, type EventDoc, type SessionDoc, type ChallengeDoc, type CodePatch } from './repository.ts';
+export type { CodeDoc, LogoDoc } from './repository.ts';
 
-export interface CodeDoc extends Omit<QRRecord, 'createdAt' | 'updatedAt' | 'lastScanAt'> {
-  _id: string; ownerId: string; createdAt: Date; updatedAt: Date; lastScanAt: Date | null; requestKey: string;
-}
-export interface LogoDoc { _id: string; ownerId: string; name: string; digest: string; image: string; thumbnail: string; createdAt: Date }
-interface EventDoc {
-  _id: string; codeId: string; at: Date; expiresAt: Date; visitor: string; automated: boolean;
-  device: string; browser: string; country: string; referrer: string;
-}
-export interface SessionDoc { _id: string; account: Account; expiresAt: Date }
-export interface ChallengeDoc { _id: string; nonce: string; expiresAt: Date }
-export class Store {
+export class Store implements QRStore {
   codes: Collection<CodeDoc>;
   logos: Collection<LogoDoc>;
   events: Collection<EventDoc>;
@@ -35,10 +27,25 @@ export class Store {
       this.challenges.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
   }
-  view(code: CodeDoc): QRRecord {
-    const { _id, ownerId, requestKey, ...record } = code;
-    return { ...record, createdAt: code.createdAt.toISOString(), updatedAt: code.updatedAt.toISOString(), lastScanAt: code.lastScanAt?.toISOString() || null };
-  }
+  view = codeView;
+  async health() { await this.db.command({ ping: 1 }); }
+  getSession(hash: string, now = new Date()) { return this.sessions.findOne({ _id: hash, expiresAt: { $gt: now } }); }
+  async saveSession(session: SessionDoc) { await this.sessions.insertOne(session); }
+  async deleteSession(hash: string) { await this.sessions.deleteOne({ _id: hash }); }
+  async saveChallenge(challenge: ChallengeDoc) { await this.challenges.insertOne(challenge); }
+  async consumeChallenge(id: string, nonce: string, now = new Date()) { return !!await this.challenges.findOneAndDelete({ _id: id, nonce, expiresAt: { $gt: now } }); }
+  listCodes(ownerId: string) { return this.codes.find({ ownerId }).sort({ updatedAt: -1 }).limit(501).toArray(); }
+  getCode(id: string, ownerId: string) { return this.codes.findOne({ _id: id, ownerId }); }
+  getCodeByRequest(ownerId: string, requestKey: string) { return this.codes.findOne({ ownerId, requestKey }); }
+  getCodeBySlug(slug: string) { return this.codes.findOne({ slug, kind: 'dynamic' }, { maxTimeMS: 2500 }); }
+  countCodes(ownerId: string) { return this.codes.countDocuments({ ownerId }); }
+  async insertCode(code: CodeDoc) { await this.codes.insertOne(code); }
+  updateCode(id: string, ownerId: string, revision: number, patch: CodePatch) { return this.codes.findOneAndUpdate({ _id: id, ownerId, revision }, { $set: patch, $inc: { revision: 1 } }, { returnDocument: 'after' }); }
+  listLogos(ownerId: string) { return this.logos.find({ ownerId }).sort({ createdAt: -1 }).limit(100).toArray(); }
+  getLogo(id: string, ownerId: string) { return this.logos.findOne({ _id: id, ownerId }); }
+  getLogoByDigest(ownerId: string, digest: string) { return this.logos.findOne({ ownerId, digest }); }
+  countLogos(ownerId: string) { return this.logos.countDocuments({ ownerId }); }
+  async insertLogo(logo: LogoDoc) { await this.logos.insertOne(logo); }
   async recordScan(code: CodeDoc, meta: Omit<EventDoc, '_id' | 'codeId' | 'at' | 'expiresAt'>, now = new Date()) {
     await this.events.insertOne({ _id: randomBytes(16).toString('hex'), codeId: code.id, at: now, expiresAt: new Date(+now + 90 * 86400_000), ...meta });
     if (!meta.automated) await this.codes.updateOne({ _id: code.id }, { $inc: { totalScans: 1 }, $max: { lastScanAt: now } });

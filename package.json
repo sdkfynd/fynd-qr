@@ -12,8 +12,8 @@
     "build": "tsc --noEmit && vite build && node scripts/finalize-dist.mjs",
     "check:dist": "node scripts/check-dist.mjs",
     "preview": "node preview.mjs",
-    "test": "tsx --test src/qr.test.ts server/app.test.ts",
-    "test:backend": "tsx --test server/app.test.ts",
+    "test": "tsx --test src/qr.test.ts server/app.test.ts server/postgres.test.ts",
+    "test:backend": "tsx --test server/app.test.ts server/postgres.test.ts",
     "dev:full": "tsx server/dev.ts",
     "start:api": "node --env-file-if-exists=.env.server --import tsx server/start.ts",
     "typecheck:server": "tsc -p tsconfig.server.json"
@@ -24,13 +24,16 @@
     "fastify": "5.12.5",
     "google-auth-library": "11.1.0",
     "mongodb": "7.6.0",
+    "pg": "^8.23.0",
     "qrcode": "1.5.4",
     "sharp": "^0.35.4",
     "tsx": "^4.20.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.23.1",
     "@types/qrcode": "^1.5.5",
     "jsqr": "1.4.0",
     "mongodb-memory-server-core": "11.2.0",
