@@ -1,6 +1,6 @@
 # Fynd QR
 
-A QR creator using the existing Fynd design system, with a local P2 pilot for Google work sign-in, saved codes, dynamic destinations and scan analytics. Static content types and exports are preserved. There are twelve body, eye-frame and eye-ball choices. A compact saved-code list separates static designs from dynamic analytics. Uploaded logos automatically save to a private My logos library; the editor includes a 10–18% size slider and transparent-padding cleanup.
+A QR creator using the existing Fynd design system, with a P2 pilot for individual team sign-in, saved codes, dynamic destinations and scan analytics. Static content types and exports are preserved. There are twelve body, eye-frame and eye-ball choices. A compact saved-code list separates static designs from dynamic analytics. Uploaded logos automatically save to a private My logos library; the editor includes a 10–18% size slider and transparent-padding cleanup.
 
 ## Try the local pilot
 
@@ -9,11 +9,11 @@ pnpm install --frozen-lockfile
 pnpm dev:full
 ```
 
-Open http://localhost:4300 and choose the clearly marked **local test account**. The local MongoDB persists your codes between runs. This account is development-only and cannot be enabled in production. A real Google OAuth client and hosted Node/MongoDB backend are still required for rollout.
+Open http://localhost:4300 and choose the clearly marked **local test account**. The local MongoDB persists your codes between runs. This account is development-only and cannot be enabled in production. For individual email/password testing, see the account commands in [the backend guide](server/README.md). Production needs a hosted Node API and either Supabase PostgreSQL or MongoDB; Google sign-in can be enabled later.
 
 The pilot creator UI requires Fynd work sign-in; public scan links do not. GitHub Pages assets are public even when a login screen is shown. Static QR files keep their original encoded content. Dynamic QR files encode a permanent scan link whose saved destination can be changed in My QR Codes.
 
-The backend verifies `gofynd.com` Google Workspace identity, enforces ownership and keeps credentials out of the static bundle. Google sign-in, hosting setup, analytics definitions and remaining operational limits are documented in [the backend guide](server/README.md).
+The backend accepts provisioned `gofynd.com` accounts or verified Google Workspace identity, enforces ownership and keeps credentials out of the static bundle. Google sign-in, hosting setup, analytics definitions and remaining operational limits are documented in [the backend guide](server/README.md).
 
 ```sh
 pnpm test
@@ -22,7 +22,7 @@ pnpm build
 pnpm check:dist
 ```
 
-For a GitHub Pages build, set `QR_BASE_PATH=/fynd-qr/`, `VITE_API_URL` to the deployed API origin, and `VITE_CREATOR_ACCESS=work`. On GitHub Actions use the `QR_API_URL` repository variable. The deploy workflow checks API readiness before publishing the account-enabled frontend. Configure the backend scan page as `https://sdkfynd.github.io/fynd-qr/` to use that GitHub address in dynamic codes. Preserve this address when moving to company hosting so printed codes continue to resolve.
+For a GitHub Pages build, set `QR_BASE_PATH=/fynd-qr/`, `VITE_API_URL` to the deployed API origin, with anonymous static creation enabled. On GitHub Actions use the `QR_API_URL` repository variable. The deploy workflow checks API readiness before publishing the account-enabled frontend. Configure the backend scan page as `https://sdkfynd.github.io/fynd-qr/` to use that GitHub address in dynamic codes. Preserve this address when moving to company hosting so printed codes continue to resolve.
 
 ## Static QR quality
 

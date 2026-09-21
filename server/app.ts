@@ -9,6 +9,8 @@ import type { Config } from './config.ts';
 import type { QRStore, CodeDoc, CodePatch } from './repository.ts';
 import { registerLogoRoutes, normalizeStoredLogo } from './logos.ts';
 import { APIError, parseDraft } from './validation.ts';
+import { hashPassword, verifyPassword, workEmail } from './passwords.ts';
+import type { CredentialDoc } from './repository.ts';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const hexId = () => randomBytes(12).toString('hex');
@@ -66,6 +68,11 @@ export async function buildApp(config: Config, store: QRStore, verifyGoogle?: (c
     const match = /^Bearer ([a-f\d]{64})$/i.exec(request.headers.authorization || '');
     const session = match && await store.getSession(hash(match[1]));
     if (!session || (config.production && session.account.localPreview)) throw new APIError(401, 'Please sign in to continue. Your current design is still here.');
+    if (session.credentialVersion !== undefined) {
+      const credential = await store.getCredentialById(session.account.id);
+      if (!credential || credential.disabled || credential.version !== session.credentialVersion) throw new APIError(401, 'Your session has ended. Please sign in again.');
+    }
+    if (session.account.mustChangePassword && !['/api/me', '/api/auth/password', '/api/auth/logout'].includes(request.routeOptions.url || '')) throw new APIError(403, 'Set your own password before opening your workspace.');
     return session.account;
   }
   async function owned(request: FastifyRequest) {
@@ -74,14 +81,52 @@ export async function buildApp(config: Config, store: QRStore, verifyGoogle?: (c
     if (!code) throw new APIError(404, 'This code could not be found in your account.');
     return code;
   }
-  async function session(user: Account) {
+  async function session(user: Account, credentialVersion?: number) {
     const token = randomBytes(32).toString('hex');
-    await store.saveSession({ _id: hash(token), account: user, expiresAt: new Date(Date.now() + 12 * 3600_000) });
+    await store.saveSession({ _id: hash(token), account: user, ...(credentialVersion === undefined ? {} : { credentialVersion }), expiresAt: new Date(Date.now() + 12 * 3600_000) });
     return { token, account: user };
   }
   registerLogoRoutes(app, store, account);
-  app.get('/health', async () => { await store.health(); return { status: 'ok' }; });
-  app.get('/api/config', async () => ({ googleClientId: config.googleClientId, localPreview: config.localPreview, scanBase: config.scanBase }));
+  app.get('/health', async () => { await store.health(); if (config.passwordLogin) await store.hasPasswordAccounts(); return { status: 'ok' }; });
+  app.get('/api/config', async () => ({ googleClientId: config.googleClientId, localPreview: config.localPreview, passwordLogin: config.passwordLogin, passwordAccountsConfigured: config.passwordLogin && await store.hasPasswordAccounts(), scanBase: config.scanBase }));
+  const passwordAccount = (credential: CredentialDoc): Account => ({ id: credential._id, email: credential.email, name: credential.name, passwordAccount: true, mustChangePassword: credential.mustChangePassword });
+  if (config.passwordLogin) {
+    app.post('/api/auth/password-login', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+      const parsed = z.object({ email: z.string().max(254), password: z.string().min(1).max(128) }).strict().safeParse(request.body);
+      const invalid = () => new APIError(401, 'Sign-in unsuccessful. Check your credentials or contact the pilot owner. After several attempts, wait 15 minutes.');
+      if (!parsed.success) throw invalid();
+      let email = '';
+      try { email = workEmail(parsed.data.email); } catch { /* Use the same response and password work for unknown accounts. */ }
+      const credential = email ? await store.getCredentialByEmail(email) : null;
+      const available = credential && !credential.disabled && (!credential.lockedUntil || credential.lockedUntil <= new Date());
+      const correct = await verifyPassword(parsed.data.password, available ? credential.passwordHash : undefined);
+      if (!available || !correct) {
+        if (available) await store.recordLoginFailure(credential._id);
+        throw invalid();
+      }
+      const current = await store.confirmPasswordLogin(credential._id, credential.version);
+      if (!current) throw invalid();
+      return session(passwordAccount(current), current.version);
+    });
+    app.post('/api/auth/password', { config: { rateLimit: { max: 10, timeWindow: '1 minute' } } }, async request => {
+      const user = await account(request);
+      const parsed = z.object({ currentPassword: z.string().min(1).max(128), newPassword: z.string().max(128) }).strict().safeParse(request.body);
+      if (!parsed.success) throw new APIError(400, 'Enter your current password and a new passphrase of 15–128 characters.');
+      const credential = await store.getCredentialById(user.id);
+      if (!credential || credential.disabled) throw new APIError(403, 'Contact the pilot owner to manage this account.');
+      const locked = credential.lockedUntil && credential.lockedUntil > new Date();
+      const correct = await verifyPassword(parsed.data.currentPassword, locked ? undefined : credential.passwordHash);
+      if (locked || !correct) {
+        if (!locked) await store.recordLoginFailure(credential._id);
+        throw new APIError(400, 'The current password could not be verified. After several attempts, wait 15 minutes or contact the pilot owner.');
+      }
+      if (parsed.data.currentPassword === parsed.data.newPassword) throw new APIError(400, 'Choose a different password from your current one.');
+      const passwordHash = await hashPassword(parsed.data.newPassword);
+      const current = await store.updateCredentialPassword(credential._id, credential.version, passwordHash, false);
+      if (!current) throw new APIError(409, 'Your account changed. Please sign in again.');
+      return session(passwordAccount(current), current.version);
+    });
+  }
   app.post('/api/auth/challenge', { config: { rateLimit: { max: 15, timeWindow: '1 minute' } } }, async () => {
     if (!config.googleClientId) throw new APIError(503, 'Google sign-in is not configured yet.');
     const id = hexId(), nonce = randomBytes(24).toString('hex');
@@ -97,7 +142,10 @@ export async function buildApp(config: Config, store: QRStore, verifyGoogle?: (c
     const user = companyAccount(payload);
     const nonce = (payload as TokenPayload & { nonce?: string }).nonce;
     if (!nonce || !await store.consumeChallenge(parsed.data.challengeId, nonce)) throw new APIError(401, 'This sign-in request expired. Please try again.');
-    return session(user);
+    const credential = await store.getCredentialByEmail(user.email);
+    if (credential?.disabled) throw new APIError(403, 'This account is disabled. Contact the pilot owner.');
+    // A verified Google identity for the same work email keeps the provisioned account's QR ownership.
+    return credential ? session({ ...passwordAccount(credential), mustChangePassword: false }, credential.version) : session(user);
   });
   if (config.localPreview) app.post('/api/auth/local-preview', async request => {
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(request.raw.socket.remoteAddress || '')) throw new APIError(403, 'Local testing only.');

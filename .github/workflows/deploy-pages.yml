@@ -46,7 +46,6 @@ jobs:
         env:
           QR_BASE_PATH: ${{ steps.pages.outputs.base_path }}/
           VITE_API_URL: ${{ vars.QR_API_URL }}
-          VITE_CREATOR_ACCESS: work
         run: |
           pnpm build
           pnpm check:dist

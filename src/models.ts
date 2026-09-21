@@ -20,7 +20,7 @@ export interface QRRecord extends QRDraft {
   totalScans: number;
   revision: number;
 }
-export interface Account { id: string; name: string; email: string; localPreview?: boolean }
+export interface Account { id: string; name: string; email: string; mustChangePassword?: boolean; passwordAccount?: boolean; localPreview?: boolean }
 export interface Analytics {
   days: number;
   scans: number;

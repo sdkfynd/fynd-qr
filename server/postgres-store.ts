@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Pool, type PoolConfig } from 'pg';
-import { codeView, type QRStore, type CodeDoc, type LogoDoc, type SessionDoc, type ChallengeDoc, type CodePatch, type ScanMeta } from './repository.ts';
+import { codeView, type QRStore, type CodeDoc, type LogoDoc, type SessionDoc, type ChallengeDoc, type CodePatch, type ScanMeta, type CredentialDoc } from './repository.ts';
 import type { Analytics } from '../src/models.ts';
 
 export interface SQLDatabase { query<T extends Record<string, any> = Record<string, any>>(sql: string, values?: any[]): Promise<{ rows: T[] }> }
@@ -15,15 +15,45 @@ function code(row: Record<string, any>): CodeDoc {
 function logo(row: Record<string, any>): LogoDoc {
   return { _id: row.id, ownerId: row.owner_id, name: row.name, digest: row.digest, image: row.image, thumbnail: row.thumbnail, createdAt: date(row.created_at) };
 }
+function credential(row: Record<string, any>): CredentialDoc {
+  return { _id: row.id, email: row.email, name: row.name, passwordHash: row.password_hash, version: row.version,
+    mustChangePassword: row.must_change_password, disabled: row.disabled, failedAttempts: row.failed_attempts,
+    lockedUntil: row.locked_until ? date(row.locked_until) : null, createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
+}
 export class PostgresStore implements QRStore {
   constructor(private sql: SQLDatabase) {}
+  async getCredentialByEmail(email: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.password_accounts where email = $1', [email]); return r ? credential(r) : null; }
+  async getCredentialById(id: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.password_accounts where id = $1', [id]); return r ? credential(r) : null; }
+  async insertCredential(c: CredentialDoc) { await this.sql.query(`insert into fynd_qr.password_accounts
+    (id,email,name,password_hash,version,must_change_password,disabled,failed_attempts,locked_until,created_at,updated_at)
+    values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [c._id,c.email,c.name,c.passwordHash,c.version,c.mustChangePassword,c.disabled,c.failedAttempts,c.lockedUntil,c.createdAt,c.updatedAt]); }
+  async updateCredentialPassword(id: string, version: number, passwordHash: string, mustChangePassword: boolean) {
+    const { rows: [r] } = await this.sql.query(`update fynd_qr.password_accounts set password_hash=$3, must_change_password=$4, version=version+1, failed_attempts=0, locked_until=null, updated_at=now()
+      where id=$1 and version=$2 and not disabled returning *`, [id,version,passwordHash,mustChangePassword]); return r ? credential(r) : null;
+  }
+  async disableCredential(id: string, disabled: boolean) { await this.sql.query('update fynd_qr.password_accounts set disabled=$2, version=version+1, updated_at=now() where id=$1', [id,disabled]); }
+  async recordLoginFailure(id: string, now = new Date()) {
+    await this.sql.query(`update fynd_qr.password_accounts set
+      failed_attempts=case when locked_until <= $2 then 1 else failed_attempts+1 end,
+      locked_until=case when (case when locked_until <= $2 then 1 else failed_attempts+1 end) >= 5 then $3::timestamptz else null end
+      where id=$1 and not disabled and (locked_until is null or locked_until <= $2)`, [id,now,new Date(+now+15*60_000)]);
+  }
+  async confirmPasswordLogin(id: string, version: number, now = new Date()) {
+    const { rows: [r] } = await this.sql.query(`update fynd_qr.password_accounts set failed_attempts=0, locked_until=null
+      where id=$1 and version=$2 and not disabled and (locked_until is null or locked_until <= $3) returning *`, [id,version,now]); return r ? credential(r) : null;
+  }
+  async hasPasswordAccounts() { return (await this.sql.query('select id from fynd_qr.password_accounts where not disabled limit 1')).rows.length > 0; }
   view = codeView;
-  async health() { await this.sql.query('select id from fynd_qr.qr_codes limit 1'); }
+  async health() {
+    await this.sql.query('select id from fynd_qr.qr_codes limit 1');
+    await this.sql.query('select id from fynd_qr.password_accounts limit 1');
+    await this.sql.query('select credential_version from fynd_qr.sessions limit 0');
+  }
   async getSession(hash: string, now = new Date()): Promise<SessionDoc | null> {
     const { rows: [r] } = await this.sql.query('select * from fynd_qr.sessions where token_hash = $1 and expires_at > $2', [hash, now]);
-    return r ? { _id: r.token_hash, account: r.account, expiresAt: date(r.expires_at) } : null;
+    return r ? { _id: r.token_hash, account: r.account, expiresAt: date(r.expires_at), ...(r.credential_version === null ? {} : { credentialVersion: r.credential_version }) } : null;
   }
-  async saveSession(s: SessionDoc) { await this.sql.query('insert into fynd_qr.sessions (token_hash, account, expires_at) values ($1, $2, $3)', [s._id, JSON.stringify(s.account), s.expiresAt]); }
+  async saveSession(s: SessionDoc) { await this.sql.query('insert into fynd_qr.sessions (token_hash, account, expires_at, credential_version) values ($1, $2, $3, $4)', [s._id, JSON.stringify(s.account), s.expiresAt, s.credentialVersion ?? null]); }
   async deleteSession(hash: string) { await this.sql.query('delete from fynd_qr.sessions where token_hash = $1', [hash]); }
   async saveChallenge(c: ChallengeDoc) { await this.sql.query('insert into fynd_qr.login_challenges (id, nonce, expires_at) values ($1, $2, $3)', [c._id, c.nonce, c.expiresAt]); }
   async consumeChallenge(id: string, nonce: string, now = new Date()) {

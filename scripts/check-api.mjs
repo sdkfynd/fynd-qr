@@ -9,6 +9,6 @@ assert.ok(health.ok && (await health.json()).status === 'ok', 'The backend healt
 assert.ok(response.ok, 'The backend configuration endpoint is unavailable.');
 assert.equal(response.headers.get('access-control-allow-origin'), origin, 'The backend must allow the personal GitHub Pages origin.');
 const config = await response.json();
-assert.ok(config.googleClientId, 'Google sign-in must be configured before publishing.');
+assert.ok(config.googleClientId || (config.passwordLogin && config.passwordAccountsConfigured), 'Configure Google sign-in or enable password login and provision at least one account before publishing.');
 assert.equal(config.localPreview, false, 'A development test account must never be published.');
-console.log('Backend health, Google configuration and allowed origin verified.');
+console.log('Backend health, sign-in readiness and allowed origin verified.');

@@ -24,27 +24,24 @@ let bridge: EditorBridge;
 let records: QRRecord[] = [], selected: QRRecord | null = null, range = 30, sequence = 0;
 let saving = false, saveKey = '', saveSignature = '', workspaceOpen = false;
 let resolveLogin: ((success: boolean) => void) | null = null;
-let authVersion = 0;
+let authVersion = 0, authBusy = false;
 
 export function initWorkspace(editor: EditorBridge) {
   bridge = editor;
-  const pilot = import.meta.env.VITE_CREATOR_ACCESS !== 'public';
-  document.body.classList.toggle('pilot-locked', pilot && !account);
-  $('main').insertAdjacentHTML('afterbegin', `<section id="pilot-gate" class="pilot-gate wrap"><div><span class="eyebrow">THE FYND TEAM PILOT</span><h1>Small square.<br>Endless possibilities.</h1><p>A home for your team’s connections. Create beautiful QR codes, update destinations, and see where each scan takes you.</p><button class="button-primary" id="pilot-signin">Continue with your work account <span>↗</span></button><span class="pilot-note">Available to gofynd.com Google Workspace accounts.</span></div><div class="pilot-art" aria-hidden="true"><div>${buildSVG('https://example.com', { foreground: '#171717', background: '#ffffff', pattern: 'rounded', eyeFrame: 'rounded', eyeBall: 'rounded' }, 260)}</div><span>CREATE. CONNECT. UNDERSTAND.</span></div></section>`);
-  $('#pilot-signin').addEventListener('click', () => void requireAuth('Welcome to the Fynd team pilot. Use your work Google account to open the generator.'));
   document.body.insertAdjacentHTML('beforeend', `
-    <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title"><button class="dialog-close" data-close="account-dialog" aria-label="Close sign in">×</button><span class="eyebrow">YOUR CREATIVE SPACE</span><h2 id="account-title">Keep your connections.</h2><p id="account-reason"></p><div class="auth-benefits"><span>↗ Change a destination anytime</span><span>▥ Understand your scans</span><span>▦ Keep your codes together</span></div><div id="auth-options"></div><p id="auth-error" class="field-error" role="alert"></p><button id="retry-auth" class="text-button" hidden>Try again</button><p class="small-note">Work accounts ending in gofynd.com only. ${import.meta.env.VITE_CREATOR_ACCESS === 'public' ? 'Static generation and downloads stay open to everyone.' : 'The creator tools are available to the Fynd team during this pilot.'}</p></dialog>
+    <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title"><button class="dialog-close" data-close="account-dialog" aria-label="Close sign in">×</button><span class="eyebrow">YOUR CREATIVE SPACE</span><h2 id="account-title">Keep your connections.</h2><p id="account-reason"></p><div class="auth-benefits"><span>↗ Change a destination anytime</span><span>▥ Understand your scans</span><span>▦ Keep your codes together</span></div><div id="auth-options"></div><p id="auth-error" class="field-error" role="alert"></p><button id="retry-auth" class="text-button" hidden>Try again</button><p class="small-note">Work accounts ending in gofynd.com only. Static generation and downloads stay open to everyone.</p></dialog>
     <dialog id="save-dialog" aria-labelledby="save-title"><button class="dialog-close" data-close="save-dialog" aria-label="Close save">×</button><span class="eyebrow">A LITTLE ORGANIZATION</span><h2 id="save-title">Give your code a name.</h2><form id="save-form"><label class="field-label" for="save-name">Code name</label><input id="save-name" class="workspace-input" maxlength="80" required placeholder="e.g. Reception Wi-Fi"><p class="small-note">Saving stores this code’s content and logo in your account. This includes any Wi-Fi password or contact details you entered.</p><p id="save-error" class="field-error" role="alert"></p><button class="button-primary" id="save-confirm">Save to My QR Codes <span>↗</span></button></form></dialog>
     <dialog id="confirm-dialog" aria-labelledby="confirm-title"><button class="dialog-close" data-close="confirm-dialog" aria-label="Cancel">×</button><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button class="button-secondary" id="confirm-cancel">Cancel</button><button class="button-primary" id="confirm-yes">Continue</button></div></dialog>
   `);
   $('main').insertAdjacentHTML('beforeend', `<section id="workspace" class="workspace wrap" hidden aria-labelledby="workspace-title" tabindex="-1"><div id="workspace-content"></div></section>`);
-  document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => { if (!saving) $<HTMLDialogElement>(`#${(el as HTMLElement).dataset.close}`).close(); }));
+  document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => { if (!saving && !authBusy) $<HTMLDialogElement>(`#${(el as HTMLElement).dataset.close}`).close(); }));
   $('#save-dialog').addEventListener('cancel', e => { if (saving) e.preventDefault(); });
-  $('#account-dialog').addEventListener('close', () => { ++authVersion; resolveLogin?.(false); resolveLogin = null; });
+  $('#account-dialog').addEventListener('cancel', event => { if (authBusy) event.preventDefault(); });
+  $('#account-dialog').addEventListener('close', () => { ++authVersion; $('#auth-options').innerHTML = ''; resolveLogin?.(false); resolveLogin = null; });
   $('#retry-auth').addEventListener('click', () => void authOptions());
   document.querySelectorAll('[data-dynamic]').forEach(el => el.addEventListener('click', () => void startDynamic()));
   document.querySelectorAll('[data-static]').forEach(el => el.addEventListener('click', () => { showEditor(); bridge.static(); }));
-  document.querySelectorAll('.brand, .nav-cta').forEach(el => el.addEventListener('click', () => { if (!pilot || account) showEditor(); }));
+  document.querySelectorAll('.brand, .nav-cta').forEach(el => el.addEventListener('click', () => { showEditor(); }));
   $('#my-codes').addEventListener('click', () => void showLibrary());
   const closeAccount = () => { $('#account-panel').hidden = true; $('#account-button').setAttribute('aria-expanded', 'false'); };
   $('#account-button').addEventListener('click', () => {
@@ -54,6 +51,7 @@ export function initWorkspace(editor: EditorBridge) {
   });
   document.addEventListener('click', event => { if (!(event.target as Element).closest('.account-control')) closeAccount(); });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && !$('#account-panel').hidden) { closeAccount(); $('#account-button').focus(); } });
+  $('#account-password').addEventListener('click', () => { closeAccount(); $<HTMLDialogElement>('#account-dialog').showModal(); void authOptions(true); });
   $('#account-signout').addEventListener('click', async () => {
     closeAccount();
     if (bridge.dirty() && !await confirm('Sign out?', 'Your unsaved editor changes will be cleared. Saved codes and logos stay in your account.', 'Sign out')) return;
@@ -69,12 +67,13 @@ export function initWorkspace(editor: EditorBridge) {
     catch (error) { $('#save-error').textContent = (error as Error).message; }
   });
   onAccountChange(() => {
-    document.body.classList.toggle('pilot-locked', pilot && !account);
     closeAccount();
     $('#account-button').innerHTML = account ? `<span class="account-avatar" aria-hidden="true">${escape(account.name.charAt(0).toUpperCase())}</span><span class="account-label">Account</span><span aria-hidden="true">⌄</span>` : 'Sign in';
     $('#account-button').setAttribute('aria-label', account ? `Account for ${account.name}` : 'Sign in');
     $('#account-name').textContent = account?.name || '';
     $('#account-email').textContent = account?.email || '';
+    $('#account-password').hidden = !account?.passwordAccount;
+    $('#account-password').textContent = account?.mustChangePassword ? 'Finish account setup' : 'Change password';
     $('#account-environment').hidden = !account?.localPreview;
     $('#account-environment').textContent = 'Local test account · saved on this computer';
     if (!account) { records = []; selected = null; if (workspaceOpen) showEditor(); }
@@ -82,46 +81,89 @@ export function initWorkspace(editor: EditorBridge) {
   void restoreSession();
 }
 export async function requireAuth(reason: string): Promise<boolean> {
-  if (account) return true;
+  if (account && !account.mustChangePassword) return true;
   if (resolveLogin) return false;
   $('#account-reason').textContent = reason;
   const result = new Promise<boolean>(resolve => { resolveLogin = resolve; });
   $<HTMLDialogElement>('#account-dialog').showModal(); void authOptions();
   return result;
 }
-async function authOptions() {
-  const version = ++authVersion;
+type AuthSession = Parameters<typeof acceptSession>[0];
+function passwordField(id: string, label: string, autocomplete: string, minimum = 1) {
+  return `<label class="field-label" for="${id}">${label}</label><div class="password-field"><input id="${id}" class="workspace-input" type="password" autocomplete="${autocomplete}" minlength="${minimum}" maxlength="128" required><button type="button" class="password-toggle" data-password="${id}" aria-label="Show ${label.toLowerCase()}" aria-pressed="false">Show</button></div>`;
+}
+function wirePasswordToggles() {
+  document.querySelectorAll<HTMLButtonElement>('[data-password]').forEach(button => button.addEventListener('click', () => {
+    const input = $<HTMLInputElement>(`#${button.dataset.password}`), show = input.type === 'password';
+    input.type = show ? 'text' : 'password'; button.textContent = show ? 'Hide' : 'Show'; button.setAttribute('aria-pressed', String(show));
+    button.setAttribute('aria-label', `${show ? 'Hide' : 'Show'} ${document.querySelector(`label[for="${input.id}"]`)!.textContent!.toLowerCase()}`);
+  }));
+}
+async function authOptions(changePassword = false) {
+  const version = ++authVersion, changing = changePassword || !!account?.mustChangePassword;
+  $('#account-title').textContent = changing ? 'Make it yours.' : 'Keep your connections.';
+  $('.auth-benefits').hidden = changing;
   $('#auth-options').innerHTML = '<p class="workspace-muted" role="status">Getting sign-in ready…</p>';
   $('#auth-error').textContent = ''; $('#retry-auth').hidden = true;
-  const finish = (session: Parameters<typeof acceptSession>[0]) => {
+  const finish = (session: AuthSession) => {
     if (version !== authVersion) return;
-    acceptSession(session); const resolve = resolveLogin; resolveLogin = null;
+    acceptSession(session);
+    if (session.account.mustChangePassword) { void authOptions(true); return; }
+    const resolve = resolveLogin; resolveLogin = null;
     $<HTMLDialogElement>('#account-dialog').close(); resolve?.(true);
+    if (changing) bridge.toast('Password updated. Other sessions have been signed out.');
   };
+  const submit = async (button: HTMLButtonElement, action: () => Promise<AuthSession>) => {
+    if (authBusy) return;
+    authBusy = true; button.disabled = true; const label = button.textContent; button.textContent = 'Please wait…'; $('#auth-error').textContent = '';
+    try { finish(await action()); }
+    catch (error) { if (version === authVersion) { if (changing && !account) await authOptions(); $('#auth-error').textContent = (error as Error).message; } }
+    finally { authBusy = false; button.disabled = false; button.textContent = label; }
+  };
+  if (changing) {
+    $('#account-reason').textContent = account?.mustChangePassword ? 'Replace your temporary password to open your workspace.' : 'Choose a new password for your team account.';
+    $('#auth-options').innerHTML = `<form id="password-change-form" class="auth-form"><input type="text" name="username" autocomplete="username" value="${escape(account?.email || '')}" hidden>${passwordField('current-password', account?.mustChangePassword ? 'Temporary password' : 'Current password', 'current-password')}${passwordField('new-password', 'New password', 'new-password', 15)}<p class="password-hint" id="password-hint">Use 15–128 characters. A few unrelated words make a memorable passphrase.</p>${passwordField('confirm-password', 'Confirm new password', 'new-password', 15)}<button class="button-primary" type="submit">${account?.mustChangePassword ? 'Set password & continue' : 'Update password'} ${actionIcon('arrow')}</button></form>`;
+    $('#new-password').setAttribute('aria-describedby', 'password-hint'); wirePasswordToggles(); $('#current-password').focus();
+    $('#password-change-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const currentPassword = $<HTMLInputElement>('#current-password').value, newPassword = $<HTMLInputElement>('#new-password').value;
+      if (newPassword !== $<HTMLInputElement>('#confirm-password').value) { $('#auth-error').textContent = 'The new passwords don’t match.'; $('#confirm-password').focus(); return; }
+      void submit($<HTMLButtonElement>('#password-change-form button[type="submit"]'), () => api('/auth/password', { method: 'POST', body: { currentPassword, newPassword } }));
+    });
+    return;
+  }
   try {
-    const config = await api<{ googleClientId: string; localPreview: boolean }>('/config');
+    const config = await api<{ googleClientId: string; localPreview: boolean; passwordLogin: boolean }>('/config');
     if (version !== authVersion) return;
     $('#auth-options').innerHTML = '';
-    if (config.localPreview) {
-      $('#auth-options').innerHTML = '<div class="local-preview-note"><strong>Local testing only</strong><p>Try the full journey with a test account on this computer. This is not Google sign-in.</p><button id="local-signin" class="button-secondary">Continue with local test account</button></div>';
-      $('#local-signin').addEventListener('click', async () => {
-        $<HTMLButtonElement>('#local-signin').disabled = true;
-        try { finish(await api('/auth/local-preview', { method: 'POST' })); }
-        catch (error) { if (version === authVersion) { $('#auth-error').textContent = (error as Error).message; $<HTMLButtonElement>('#local-signin').disabled = false; } }
+    if (config.passwordLogin) {
+      $('#auth-options').innerHTML = `<form id="password-login-form" class="auth-form"><label class="field-label" for="login-email">Work email</label><input id="login-email" class="workspace-input" type="email" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" placeholder="you@gofynd.com" required>${passwordField('login-password', 'Password', 'current-password')}<button class="button-primary" type="submit">Sign in ${actionIcon('arrow')}</button><p class="password-hint">Need access or a password reset? Contact the person who invited you to the Fynd QR pilot.</p></form>`;
+      wirePasswordToggles(); $('#login-email').focus();
+      $('#password-login-form').addEventListener('submit', event => {
+        event.preventDefault();
+        const email = $<HTMLInputElement>('#login-email').value, password = $<HTMLInputElement>('#login-password').value;
+        void submit($<HTMLButtonElement>('#password-login-form button[type="submit"]'), () => api('/auth/password-login', { method: 'POST', body: { email, password } }));
       });
     }
+    if (config.localPreview) {
+      $('#auth-options').insertAdjacentHTML('beforeend', '<details class="local-preview-note"><summary>Development tools</summary><p>Use a shared local test account on this computer only.</p><button id="local-signin" class="button-secondary" type="button">Continue with local test account</button></details>');
+      $('#local-signin').addEventListener('click', () => void submit($<HTMLButtonElement>('#local-signin'), () => api('/auth/local-preview', { method: 'POST' })));
+    }
     if (config.googleClientId) {
-      const [challenge] = await Promise.all([api<{ id: string; nonce: string }>('/auth/challenge', { method: 'POST' }), loadGoogle()]);
-      if (version !== authVersion) return;
-      const container = document.createElement('div'); container.className = 'google-signin'; $('#auth-options').prepend(container);
-      window.google!.accounts.id.initialize({ client_id: config.googleClientId, nonce: challenge.nonce, auto_select: false, callback: async response => {
+      try {
+        const [challenge] = await Promise.all([api<{ id: string; nonce: string }>('/auth/challenge', { method: 'POST' }), loadGoogle()]);
         if (version !== authVersion) return;
-        $('#auth-error').textContent = ''; container.setAttribute('inert', '');
-        try { finish(await api('/auth/google', { method: 'POST', body: { credential: response.credential, challengeId: challenge.id } })); }
-        catch (error) { if (version === authVersion) { $('#auth-error').textContent = (error as Error).message; $('#retry-auth').hidden = false; container.removeAttribute('inert'); } }
-      } });
-      window.google!.accounts.id.renderButton(container, { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 300 });
-    } else if (!config.localPreview) throw new Error('Google sign-in is not configured yet. Please contact the pilot owner.');
+        const container = document.createElement('div'); container.className = 'google-signin'; $('#auth-options').append(container);
+        window.google!.accounts.id.initialize({ client_id: config.googleClientId, nonce: challenge.nonce, auto_select: false, callback: async response => {
+          if (version !== authVersion || authBusy) return;
+          authBusy = true; $('#auth-error').textContent = ''; container.setAttribute('inert', '');
+          try { finish(await api('/auth/google', { method: 'POST', body: { credential: response.credential, challengeId: challenge.id } })); }
+          catch (error) { if (version === authVersion) { $('#auth-error').textContent = (error as Error).message; $('#retry-auth').hidden = false; container.removeAttribute('inert'); } }
+          finally { authBusy = false; }
+        } });
+        window.google!.accounts.id.renderButton(container, { theme: 'outline', size: 'large', shape: 'pill', text: 'continue_with', width: 300 });
+      } catch { if (version === authVersion) { $('#auth-error').textContent = 'Google sign-in could not load. Try again or use your individual credentials.'; $('#retry-auth').hidden = false; } }
+    } else if (!config.localPreview && !config.passwordLogin) throw new Error('Sign-in is not configured yet. Please contact the pilot owner.');
   } catch (error) {
     if (version !== authVersion) return;
     $('#auth-options').innerHTML = ''; $('#auth-error').textContent = (error as Error).message; $('#retry-auth').hidden = false;
@@ -169,7 +211,7 @@ async function openEditorRecord(code: QRRecord): Promise<boolean> {
   showEditor(); bridge.load(code); $('#generator').scrollIntoView({ behavior: 'smooth' }); return true;
 }
 export async function showLibrary() {
-  if (!await requireAuth('Your codes, in one place. Sign in with your work Google account to continue.')) return;
+  if (!await requireAuth('Your codes, in one place. Sign in with your team account to continue.')) return;
   workspaceOpen = true; $('#my-codes').setAttribute('aria-current', 'page'); document.querySelectorAll<HTMLElement>('main > :not(#workspace)').forEach(el => el.hidden = true); $('#workspace').hidden = false;
   selected = null; $('#workspace-content').removeAttribute('aria-busy');
   const current = ++sequence;

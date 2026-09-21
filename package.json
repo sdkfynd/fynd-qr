@@ -12,11 +12,12 @@
     "build": "tsc --noEmit && vite build && node scripts/finalize-dist.mjs",
     "check:dist": "node scripts/check-dist.mjs",
     "preview": "node preview.mjs",
-    "test": "tsx --test src/qr.test.ts server/app.test.ts server/postgres.test.ts",
-    "test:backend": "tsx --test server/app.test.ts server/postgres.test.ts",
+    "test": "tsx --test src/qr.test.ts server/app.test.ts server/postgres.test.ts server/password-auth.test.ts",
+    "test:backend": "tsx --test server/app.test.ts server/postgres.test.ts server/password-auth.test.ts",
     "dev:full": "tsx server/dev.ts",
     "start:api": "node --env-file-if-exists=.env.server --import tsx server/start.ts",
-    "typecheck:server": "tsc -p tsconfig.server.json"
+    "typecheck:server": "tsc -p tsconfig.server.json",
+    "accounts": "node --env-file-if-exists=.env.server --import tsx server/manage-accounts.ts"
   },
   "dependencies": {
     "@fastify/cors": "11.3.0",

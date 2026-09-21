@@ -28,6 +28,8 @@ before(async () => {
   await db.exec("create table public.bins (id int primary key); insert into public.bins values (1); create role anon; create role authenticated; create role service_role bypassrls;");
   const migration = readFileSync(new URL('./migrations/001_fynd_qr.sql', import.meta.url), 'utf8');
   await db.exec(migration); await db.exec(migration); // Additive and repeatable.
+  const passwordMigration = readFileSync(new URL('./migrations/002_password_accounts.sql', import.meta.url), 'utf8');
+  await db.exec(passwordMigration); await db.exec(passwordMigration);
   await db.exec('set role fynd_qr_app');
   store = new PostgresStore(db);
   for (const [id, token] of [['alice', tokenA], ['bob', tokenB]]) await store.saveSession({ _id: hash(token), account: { id, name: id, email: `${id}@gofynd.com` }, expiresAt: new Date(Date.now() + 3600_000) });
@@ -43,10 +45,11 @@ test('Postgres role is confined to QR tables and existing bin data survives the 
   try {
     assert.deepEqual((await db.query('select * from public.bins')).rows, [{ id: 1 }]);
     const { rows } = await db.query<{ relrowsecurity: boolean }>("select relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'fynd_qr' and c.relkind = 'r'");
-    assert.equal(rows.length, 5); assert.ok(rows.every(r => r.relrowsecurity));
+    assert.equal(rows.length, 6); assert.ok(rows.every(r => r.relrowsecurity));
     for (const role of ['anon', 'authenticated', 'service_role']) {
       await db.exec(`set role ${role}`);
       await assert.rejects(db.query('select * from fynd_qr.qr_codes'), /permission denied/);
+      await assert.rejects(db.query('select * from fynd_qr.password_accounts'), /permission denied/);
       await db.exec('reset role');
     }
   } finally { await db.exec('set role fynd_qr_app'); }
@@ -151,4 +154,15 @@ test('Postgres connection config verifies TLS and disallows conflicting storage 
   assert.throws(() => readConfig({ MONGODB_URI: 'mongodb://localhost/test', DATABASE_URL: 'postgresql://localhost/test' }));
   const config = readConfig({ NODE_ENV: 'production', GOOGLE_CLIENT_ID: 'test-client', DATABASE_URL: 'postgresql://db.example.com/postgres', ANALYTICS_SECRET: 'a'.repeat(32), APP_ORIGINS: 'https://sdkfynd.github.io', SCAN_BASE_URL: 'https://api.example.com' });
   assert.equal(config.postgresUri, 'postgresql://db.example.com/postgres'); assert.equal(config.localPreview, false);
+});
+
+test('Postgres readiness fails when the password-account migration has not been applied', async () => {
+  const unmigrated = await PGlite.create();
+  try {
+    await unmigrated.exec(readFileSync(new URL('./migrations/001_fynd_qr.sql', import.meta.url), 'utf8'));
+    await assert.rejects(new PostgresStore(unmigrated).health(), /password_accounts.*does not exist/);
+    await unmigrated.exec(readFileSync(new URL('./migrations/002_password_accounts.sql', import.meta.url), 'utf8'));
+    await unmigrated.exec('set role fynd_qr_app');
+    await new PostgresStore(unmigrated).health();
+  } finally { await unmigrated.close(); }
 });

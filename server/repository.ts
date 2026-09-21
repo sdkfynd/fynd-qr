@@ -8,7 +8,7 @@ export interface EventDoc {
   _id: string; codeId: string; at: Date; expiresAt: Date; visitor: string; automated: boolean;
   device: string; browser: string; country: string; referrer: string;
 }
-export interface SessionDoc { _id: string; account: Account; expiresAt: Date }
+export interface SessionDoc { _id: string; account: Account; expiresAt: Date; credentialVersion?: number }
 export interface ChallengeDoc { _id: string; nonce: string; expiresAt: Date }
 export type ScanMeta = Omit<EventDoc, '_id' | 'codeId' | 'at' | 'expiresAt'>;
 export type CodePatch = Partial<Pick<CodeDoc, 'name' | 'contentType' | 'fields' | 'design' | 'destination' | 'payload' | 'status' | 'updatedAt'>>;
@@ -16,7 +16,20 @@ export function codeView(code: CodeDoc): QRRecord {
   const { _id, ownerId, requestKey, ...record } = code;
   return { ...record, createdAt: code.createdAt.toISOString(), updatedAt: code.updatedAt.toISOString(), lastScanAt: code.lastScanAt?.toISOString() || null };
 }
+export interface CredentialDoc {
+  _id: string; email: string; name: string; passwordHash: string; version: number;
+  mustChangePassword: boolean; disabled: boolean; failedAttempts: number; lockedUntil: Date | null;
+  createdAt: Date; updatedAt: Date;
+}
 export interface QRStore {
+  getCredentialByEmail(email: string): Promise<CredentialDoc | null>;
+  getCredentialById(id: string): Promise<CredentialDoc | null>;
+  insertCredential(doc: CredentialDoc): Promise<void>;
+  updateCredentialPassword(id: string, version: number, passwordHash: string, mustChangePassword: boolean): Promise<CredentialDoc | null>;
+  disableCredential(id: string, disabled: boolean): Promise<void>;
+  recordLoginFailure(id: string, now?: Date): Promise<void>;
+  confirmPasswordLogin(id: string, version: number, now?: Date): Promise<CredentialDoc | null>;
+  hasPasswordAccounts(): Promise<boolean>;
   health(): Promise<void>;
   view(code: CodeDoc): QRRecord;
   getSession(hash: string, now?: Date): Promise<SessionDoc | null>;

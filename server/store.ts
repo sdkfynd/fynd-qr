@@ -1,22 +1,25 @@
 import { MongoClient, type Db, type Collection } from 'mongodb';
 import { randomBytes } from 'node:crypto';
 import type { Analytics } from '../src/models.ts';
-import { codeView, type QRStore, type CodeDoc, type LogoDoc, type EventDoc, type SessionDoc, type ChallengeDoc, type CodePatch } from './repository.ts';
+import { codeView, type QRStore, type CodeDoc, type LogoDoc, type EventDoc, type SessionDoc, type ChallengeDoc, type CodePatch, type CredentialDoc } from './repository.ts';
 export type { CodeDoc, LogoDoc } from './repository.ts';
 
 export class Store implements QRStore {
+  credentials: Collection<CredentialDoc>;
   codes: Collection<CodeDoc>;
   logos: Collection<LogoDoc>;
   events: Collection<EventDoc>;
   sessions: Collection<SessionDoc>;
   challenges: Collection<ChallengeDoc>;
   constructor(public db: Db) {
+    this.credentials = db.collection<CredentialDoc>('password_accounts');
     this.logos = db.collection<LogoDoc>('logos');
     this.codes = db.collection<CodeDoc>('qr_codes'); this.events = db.collection<EventDoc>('scan_events');
     this.sessions = db.collection<SessionDoc>('sessions'); this.challenges = db.collection<ChallengeDoc>('login_challenges');
   }
   async initialize() {
     await Promise.all([
+      this.credentials.createIndex({ email: 1 }, { unique: true }),
       this.logos.createIndex({ ownerId: 1, digest: 1 }, { unique: true }),
       this.logos.createIndex({ ownerId: 1, createdAt: -1 }),
       this.codes.createIndex({ ownerId: 1, updatedAt: -1 }),
@@ -27,6 +30,23 @@ export class Store implements QRStore {
       this.challenges.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
     ]);
   }
+  getCredentialByEmail(email: string) { return this.credentials.findOne({ email }); }
+  getCredentialById(id: string) { return this.credentials.findOne({ _id: id }); }
+  async insertCredential(doc: CredentialDoc) { await this.credentials.insertOne(doc); }
+  updateCredentialPassword(id: string, version: number, passwordHash: string, mustChangePassword: boolean) {
+    return this.credentials.findOneAndUpdate({ _id: id, version, disabled: false }, { $set: { passwordHash, mustChangePassword, failedAttempts: 0, lockedUntil: null, updatedAt: new Date() }, $inc: { version: 1 } }, { returnDocument: 'after' });
+  }
+  async disableCredential(id: string, disabled: boolean) { await this.credentials.updateOne({ _id: id }, { $set: { disabled, updatedAt: new Date() }, $inc: { version: 1 } }); }
+  async recordLoginFailure(id: string, now = new Date()) {
+    await this.credentials.updateOne({ _id: id, disabled: false, $or: [{ lockedUntil: null }, { lockedUntil: { $lte: now } }] }, [
+      { $set: { failedAttempts: { $cond: [{ $and: [{ $ne: ['$lockedUntil', null] }, { $lte: ['$lockedUntil', now] }] }, 1, { $add: ['$failedAttempts', 1] }] } } },
+      { $set: { lockedUntil: { $cond: [{ $gte: ['$failedAttempts', 5] }, new Date(+now + 15 * 60_000), null] } } },
+    ]);
+  }
+  confirmPasswordLogin(id: string, version: number, now = new Date()) {
+    return this.credentials.findOneAndUpdate({ _id: id, version, disabled: false, $or: [{ lockedUntil: null }, { lockedUntil: { $lte: now } }] }, { $set: { failedAttempts: 0, lockedUntil: null } }, { returnDocument: 'after' });
+  }
+  async hasPasswordAccounts() { return !!await this.credentials.findOne({ disabled: false }, { projection: { _id: 1 } }); }
   view = codeView;
   async health() { await this.db.command({ ping: 1 }); }
   getSession(hash: string, now = new Date()) { return this.sessions.findOne({ _id: hash, expiresAt: { $gt: now } }); }

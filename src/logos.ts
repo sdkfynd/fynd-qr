@@ -13,7 +13,8 @@ export function initLogoLibrary(use: typeof apply) {
   $('#logo-library-tab').addEventListener('click', () => { switchTab(true); void load(); });
   $('#logo-add-tab').addEventListener('click', () => switchTab(false));
   $('#logo-retry-save').addEventListener('click', async () => {
-    if (pending && await requireAuth('Sign in to keep this uploaded logo in your library.')) void saveUploadedLogo(pending.image, pending.name);
+    const upload = pending;
+    if (upload && await requireAuth('Sign in to keep this uploaded logo in your library.')) void saveUploadedLogo(upload.image, upload.name);
   });
   onAccountChange(() => {
     ++revision; logos = []; loaded = false; $('#logo-library-count').textContent = '';
@@ -29,7 +30,7 @@ function switchTab(library: boolean) {
   for (const [id, selected] of [['logo-add-tab', !library], ['logo-library-tab', library]] as const) { $(`#${id}`).setAttribute('aria-selected', String(selected)); $(`#${id}`).tabIndex = selected ? 0 : -1; }
 }
 async function load(force = false) {
-  if (!account) {
+  if (!account || account.mustChangePassword) {
     $('#logo-library-list').innerHTML = '<p class="logo-library-empty">Sign in to see the logos you’ve saved.</p><button class="button-secondary" id="logos-signin">Sign in to My logos</button>';
     $('#logos-signin').addEventListener('click', async () => { if (await requireAuth('Your uploaded logos are saved privately in your account.')) void load(); }); return;
   }
@@ -63,7 +64,7 @@ export async function saveUploadedLogo(image: string, filename: string) {
   const upload = { image, name: filename.trim().slice(0, 80) || 'Untitled logo' };
   pending = upload;
   $('#logo-retry-save').hidden = true;
-  if (!account) { $('#logo-save-status').textContent = 'Logo added to this QR. Sign in to save it for next time.'; $('#logo-retry-save').hidden = false; return; }
+  if (!account || account.mustChangePassword) { $('#logo-save-status').textContent = 'Logo added to this QR. Sign in to save it for next time.'; $('#logo-retry-save').hidden = false; return; }
   if (saving) return;
   const owner = account.id;
   saving = true; $('#logo-save-status').textContent = 'Saving to My logos…';

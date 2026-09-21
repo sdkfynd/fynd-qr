@@ -10,6 +10,7 @@ const change = () => listeners.forEach(listener => listener());
 export function onAccountChange(callback: () => void) { listeners.add(callback); return () => listeners.delete(callback); }
 export class RequestError extends Error { constructor(public status: number, message: string) { super(message); } }
 export async function api<T>(path: string, options: { method?: string; body?: unknown; key?: string; referrerHost?: string; anonymous?: boolean } = {}): Promise<T> {
+  const requestToken = token;
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 15_000);
   try {
     const response = await fetch(`${configured}/api${path}`, {
@@ -18,7 +19,7 @@ export async function api<T>(path: string, options: { method?: string; body?: un
       ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
     });
     const data = await response.json().catch(() => null);
-    if (response.status === 401) clearSession();
+    if (response.status === 401 && requestToken && token === requestToken) clearSession();
     if (!response.ok || !data) throw new RequestError(response.status, data?.error || 'The account service is unavailable right now. Please try again shortly.');
     return data;
   } catch (error) {
@@ -38,7 +39,8 @@ export function clearSession() {
 }
 export async function restoreSession() {
   if (!token) return;
-  try { account = (await api<{ account: Account }>('/me')).account; change(); } catch { /* A temporary outage must not erase a valid session. */ }
+  const restoringToken = token;
+  try { const restored = (await api<{ account: Account }>('/me')).account; if (token === restoringToken) { account = restored; change(); } } catch { /* A temporary outage must not erase a valid session. */ }
 }
 export async function logout() { if (token) await api('/auth/logout', { method: 'POST' }); clearSession(); }
 
