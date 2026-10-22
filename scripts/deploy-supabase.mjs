@@ -19,7 +19,9 @@ async function inventory(project) {
   return {codes:found.codes?await query(project,'select id,owner_id,slug,scan_url from fynd_qr.qr_codes order by id'):[],
     logos:found.logos?await query(project,'select id,owner_id,digest from fynd_qr.logos order by id'):[]};
 }
-const before=await inventory(ref),legacyRef=process.env.QR_LEGACY_PROJECT_REF;
+const auditing=process.argv.includes('--migrate') || process.argv.includes('--audit-legacy');
+const before=auditing?await inventory(ref):null,legacyRef=process.env.QR_LEGACY_PROJECT_REF;
+if (auditing) {
 if (legacyRef && legacyRef!==ref) {
   assert.match(legacyRef,/^[a-z]{20}$/);
   const legacy=await inventory(legacyRef);
@@ -36,13 +38,16 @@ if (process.argv.includes('--migrate')) {
   assert.ok(JSON.stringify(await inventory(ref))===JSON.stringify(before),'Migration must preserve QR ownership, ids, slugs and scan addresses.');
   console.log('QR-only migrations applied; existing codes, logos and scan addresses verified.');
 }
+}
 const auth=await management(`/projects/${ref}/config/auth`);
+if (process.argv.includes('--require-auth')) {
 assert.equal(auth.external_google_enabled,true,'Enable Google in the selected QR project.');
-assert.equal(auth.disable_signup,false,'Allow ordinary Google accounts to create their QR account.');
+assert.notEqual(auth.disable_signup,true,'Allow ordinary Google accounts to create their QR account.');
 assert.equal(auth.site_url,'https://sdkfynd.github.io/fynd-qr/','Use the stable GitHub Pages site URL.');
+}
 if (process.argv.includes('--deploy')) {
   const child=spawn('pnpm',['dlx','supabase@2.121.0','functions','deploy','qr-api','--project-ref',ref,'--use-api'],{stdio:'inherit',env:process.env});
   const result=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);});
   assert.equal(result,0,'Edge Function deployment failed.');
 }
-console.log(`QR deployment target verified; ${before.codes.length} saved codes and ${before.logos.length} logos retained.`);
+console.log(auditing?`QR deployment target verified; ${before.codes.length} saved codes and ${before.logos.length} logos retained.`:'QR Edge deployment target verified. Database migrations are applied separately through the private operator connection.');

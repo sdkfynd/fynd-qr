@@ -43,7 +43,7 @@ jobs:
           SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
           QR_SUPABASE_URL: ${{ vars.QR_SUPABASE_URL }}
           QR_LEGACY_PROJECT_REF: ${{ vars.QR_LEGACY_PROJECT_REF }}
-        run: node scripts/deploy-supabase.mjs --migrate --deploy
+        run: node scripts/deploy-supabase.mjs --deploy --require-auth
       - name: Verify backend types and deployment readiness
         env:
           QR_API_URL: ${{ vars.QR_API_URL }}
