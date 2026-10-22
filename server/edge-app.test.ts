@@ -76,6 +76,17 @@ test('Edge rejects missing, malformed, forged and expired tokens on every manage
     assert.equal((await call('/api/codes',token,'POST',draft(),'a'.repeat(32))).status,401);
   }
 });
+test('Hosted gateway and full invoke paths keep public routes public and management authenticated',async()=>{
+  for (const prefix of ['/qr-api','/functions/v1/qr-api']) {
+    const request=(path:string,token?:string)=>handle(new Request('https://project.supabase.co'+prefix+path,{headers:{Origin:origin,...(token?{Authorization:`Bearer ${token}`}:{})}}));
+    assert.equal((await request('/health')).status,200);
+    assert.equal((await request('/api/config')).status,200);
+    assert.equal((await request('/api/resolve/abcdefghijkl')).status,404);
+    assert.equal((await request('/api/codes')).status,401);
+    assert.equal((await request('/api/me',tokenA)).status,200);
+  }
+  assert.equal((await handle(new Request('https://project.supabase.co/qr-api-extra/health',{headers:{Origin:origin}}))).status,401);
+});
 test('Auth service outages fail closed and preserve an existing session in the browser',async()=>{
   const verify=supabaseVerifier(config,async()=>new Response('down',{status:503}));
   await assert.rejects(verify(`Bearer ${tokenA}`),(e:any)=>e.statusCode===503);

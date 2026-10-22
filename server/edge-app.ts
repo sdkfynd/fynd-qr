@@ -51,7 +51,10 @@ export function createEdgeApp(config: EdgeConfig, store: SupabaseStore, verify=s
     const json=(body:unknown,status=200) => Response.json(body,{status,headers});
     try {
       const url=new URL(request.url), base=new URL(config.apiUrl).pathname;
-      const path=url.pathname.startsWith(base+'/')?url.pathname.slice(base.length):url.pathname;
+      // Supabase's hosted gateway removes /functions/v1 before forwarding.
+      const functionBase=base.replace(/^\/functions\/v1(?=\/)/,'');
+      const prefix=[base,functionBase].find(candidate=>url.pathname.startsWith(candidate+'/'));
+      const path=prefix?url.pathname.slice(prefix.length):url.pathname;
       if (origin && !config.origins.includes(origin)) throw new APIError(403,'This website is not allowed to access the account service.');
       if (request.method==='OPTIONS') return new Response(null,{status:204,headers:{...headers,
         'Access-Control-Allow-Methods':'GET, HEAD, POST, PATCH, OPTIONS',
