@@ -8,7 +8,7 @@ import { connectStore } from './store.ts';
 import { PostgresStore } from './postgres-store.ts';
 import { buildApp } from './app.ts';
 import { readConfig } from './config.ts';
-import { hashPassword, verifyPassword, checkPassword, workEmail } from './passwords.ts';
+import { hashPassword, verifyPassword, checkPassword, accountEmail } from './passwords.ts';
 import type { QRStore, CredentialDoc } from './repository.ts';
 import { DEFAULT_DESIGN } from '../src/qr.ts';
 import type { TokenPayload } from 'google-auth-library';
@@ -19,14 +19,16 @@ const config = readConfig({ NODE_ENV: 'test', PASSWORD_LOGIN: '1', GOOGLE_CLIENT
 const headers = (token?: string) => ({ origin, ...(token ? { authorization: `Bearer ${token}` } : {}) });
 const draft = { name: 'Password account code', kind: 'dynamic', contentType: 'url', fields: { url: 'https://example.com/first' }, design: { ...DEFAULT_DESIGN } };
 
-test('passwords use independent salts, bounded passphrases, and exact work domains', async () => {
+test('passwords use independent salts, bounded passphrases, and valid email addresses', async () => {
   const a = await hashPassword(initial), b = await hashPassword(initial);
   assert.notEqual(a, b); assert.ok(!a.includes(initial)); assert.ok(await verifyPassword(initial, a));
   assert.equal(await verifyPassword('wrong', a), false); assert.equal(await verifyPassword(initial), false);
   assert.throws(() => checkPassword('short')); assert.throws(() => checkPassword('a'.repeat(129))); assert.throws(() => checkPassword('password123456789'));
   checkPassword('a unicode phrase with spaces 🌱');
-  assert.equal(workEmail(' Person@GoFynd.com '), 'person@gofynd.com');
-  for (const email of ['a@other.com', 'a@gofynd.com.evil', 'a@@gofynd.com', 'a b@gofynd.com']) assert.throws(() => workEmail(email));
+  assert.equal(accountEmail(' Person@GoFynd.com '), 'person@gofynd.com');
+  assert.equal(accountEmail('Person@Gmail.com'), 'person@gmail.com');
+  assert.equal(accountEmail('a@other.com'), 'a@other.com');
+  for (const email of ['a@invalid', 'a@@gofynd.com', 'a b@gofynd.com']) assert.throws(() => accountEmail(email));
   const production = { NODE_ENV: 'production', PASSWORD_LOGIN: '1', MONGODB_URI: 'mongodb://example', ANALYTICS_SECRET: 'a'.repeat(32), APP_ORIGINS: 'https://sdkfynd.github.io', SCAN_BASE_URL: 'https://api.example' };
   assert.equal(readConfig(production).googleClientId, ''); assert.throws(() => readConfig({ ...production, PASSWORD_LOGIN: '0' }));
   assert.throws(() => readConfig({ ...production, LOCAL_PREVIEW_AUTH: '1' }));

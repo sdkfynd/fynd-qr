@@ -55,12 +55,12 @@ test('Postgres role is confined to QR tables and existing bin data survives the 
   } finally { await db.exec('set role fynd_qr_app'); }
   assert.equal((await app.inject({ url: '/health' })).statusCode, 200);
 });
-test('Postgres sessions and Google challenges enforce expiry, single use, domain, and revocation', async () => {
+test('Postgres sessions and Google challenges enforce expiry, single use, any Google domain, and revocation', async () => {
   const challenge = (await app.inject({ method: 'POST', url: '/api/auth/challenge', headers: { origin } })).json();
   payload = { sub: 'google-test', email: 'test@gofynd.com', email_verified: true, hd: 'gofynd.com', nonce: 'wrong' } as typeof payload;
   const login = (credential = 'valid-test-credential') => app.inject({ method: 'POST', url: '/api/auth/google', headers: { origin }, payload: { credential, challengeId: challenge.id } });
   assert.equal((await login('invalid-signature')).statusCode, 401); assert.equal((await login()).statusCode, 401);
-  payload.nonce = challenge.nonce; payload.hd = 'other.com'; assert.equal((await login()).statusCode, 403); payload.hd = 'gofynd.com';
+  payload.nonce = challenge.nonce; payload.hd = undefined; payload.email = 'person@gmail.com';
   const responses = await Promise.all([login(), login()]);
   assert.deepEqual(responses.map(r => r.statusCode).sort(), [200, 401]);
   const token = responses.find(r => r.statusCode === 200)!.json().token;

@@ -1,19 +1,23 @@
 # Fynd QR
 
-A QR creator using the existing Fynd design system, with a P2 pilot for individual team sign-in, saved codes, dynamic destinations and scan analytics. Static content types and exports are preserved. There are twelve body, eye-frame and eye-ball choices. A compact saved-code list separates static designs from dynamic analytics. Uploaded logos automatically save to a private My logos library; the editor includes a 10–18% size slider and transparent-padding cleanup.
+Create anonymous static QR codes, or sign in with any Google account to save designs, manage dynamic destinations, view scan analytics and reuse a private logo library. Seven static content types, twelve independently selectable body/frame/ball shapes, custom colors and logos, and PNG/SVG exports are preserved.
 
-## Try the local pilot
+Production uses GitHub Pages for the frontend and a dedicated Supabase project for Google authentication, sessions, PostgreSQL and the `qr-api` Edge Function. There is no Google email-domain restriction and no separate Node hosting account is required. Static creation/downloads and public scan resolution do not require sign-in.
+
+## Local development
+
+Use Node.js 24 and pnpm 11.19.0:
 
 ```sh
 pnpm install --frozen-lockfile
 pnpm dev:full
 ```
 
-Open http://localhost:4300 and choose the clearly marked **local test account**. The local MongoDB persists your codes between runs. This account is development-only and cannot be enabled in production. For individual email/password testing, see the account commands in [the backend guide](server/README.md). Production needs a hosted Node API and either Supabase PostgreSQL or MongoDB; Google sign-in can be enabled later.
+Open http://localhost:4300. With the public environment variables empty, this isolated development pilot uses a clearly marked local test account and local MongoDB. It does not connect to production. Its data persists in ignored `.local-data/mongo`. The original Node backend remains available for local development and migration support; the production Edge entrypoint never imports native `sharp`.
 
-The pilot creator UI requires Fynd work sign-in; public scan links do not. GitHub Pages assets are public even when a login screen is shown. Static QR files keep their original encoded content. Dynamic QR files encode a permanent scan link whose saved destination can be changed in My QR Codes.
+To develop against a selected Supabase environment, copy `.env.example` to ignored `.env.local` and set all three public values. Use `pnpm dev`, authorize its exact localhost URL in that Supabase project, and use an isolated test project rather than a shared production database.
 
-The backend accepts provisioned `gofynd.com` accounts or verified Google Workspace identity, enforces ownership and keeps credentials out of the static bundle. Google sign-in, hosting setup, analytics definitions and remaining operational limits are documented in [the backend guide](server/README.md).
+## Verification
 
 ```sh
 pnpm test
@@ -22,17 +26,19 @@ pnpm build
 pnpm check:dist
 ```
 
-For a GitHub Pages build, set `QR_BASE_PATH=/fynd-qr/`, `VITE_API_URL` to the deployed API origin, with anonymous static creation enabled. On GitHub Actions use the `QR_API_URL` repository variable. The deploy workflow checks API readiness before publishing the account-enabled frontend. Configure the backend scan page as `https://sdkfynd.github.io/fynd-qr/` to use that GitHub address in dynamic codes. Preserve this address when moving to company hosting so printed codes continue to resolve.
-
-## Static QR quality
-
-Content is encoded in the browser with high error correction and a quiet zone. Colors are checked for contrast, structural QR cells are preserved, and dense content selects a larger PNG export. Generated SVGs embed normalized PNG logos and do not load external images. Validate a phone scan and a physical print at its final size before distributing codes. No software scan test guarantees all printers, cameras or materials.
-
-To generate raster scan fixtures and verify with a second independent decoder:
+The suite covers QR rendering/decoding, legacy backend behavior, ordinary Google accounts, invalid/expired tokens, owner isolation, legacy ownership mapping, stable scan URLs, destination changes, analytics, pause/reactivation and bounded private logos. Run the actual Deno compatibility checks as well:
 
 ```sh
-QR_SCAN_DIR=/absolute/empty/directory pnpm exec tsx --test src/qr.test.ts
-python qa/verify-native.py /absolute/empty/directory
+pnpm dlx deno@2.9.6 check --no-lock --config supabase/functions/qr-api/deno.json supabase/functions/qr-api/index.ts
+pnpm dlx deno@2.9.6 test --no-lock --allow-env --allow-read --allow-write --allow-net=127.0.0.1 --config supabase/functions/qr-api/deno.json scripts/edge-runtime.test.ts
 ```
 
-Python dependencies are in `qa/requirements.txt`. Browser image/export checks are available at `/qa/browser.html` during local development only; QA files are excluded from production output. Font and logo provenance is recorded in the existing asset notes, and runtime dependency notices are bundled with the site.
+Deno tests complement Node tests; live Supabase and real Google OAuth must also be verified before declaring a production release complete. Browser image checks are at `/qa/browser.html` on the Vite development server. Native decoder checks use `qa/requirements.txt` and `qa/verify-native.py`. Physical phone/print scans remain necessary before distributing a final design.
+
+## Production
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the selected Supabase project, personal Google OAuth configuration, restricted database role, migration checks and release commands. The included workflow deploys the Edge API and then GitHub Pages only after tests and live readiness checks pass.
+
+Existing records retain their ids, legacy owners, slugs and scan URLs. Google-subject links preserve previous Google work; verified Gmail/Workspace email or an administrator approval protects manual-account migration. Previously printed scan addresses must keep resolving, including an older direct API origin if one was distributed. Do not switch projects without checking and migrating existing QR data first.
+
+Fonts and logo presets are self-hosted. Notices are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).

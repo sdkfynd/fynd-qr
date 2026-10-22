@@ -1,3 +1,7 @@
+# Backend implementations
+
+Production uses Supabase Auth/PostgreSQL and the `supabase/functions/qr-api` entrypoint. Follow [the production guide](../DEPLOYMENT.md). This Node service remains available for isolated local development and migration support. Its manual-password sessions are not the production login mechanism.
+
 # Fynd QR account and scan service
 
 The frontend stays on GitHub Pages. Fastify/Node.js runs on an HTTPS application host, with Supabase PostgreSQL or MongoDB for accounts, saved codes, sessions and scan events. GitHub Pages does not run this server.
@@ -19,7 +23,7 @@ Run `pnpm test`, `pnpm typecheck:server`, `pnpm build` and `pnpm check:dist`. Te
 
 1. Connect a production database with backups and least-privilege access. For Supabase, apply `migrations/001_fynd_qr.sql` followed by `002_password_accounts.sql` using the project SQL editor/admin connection. The migrations only change the dedicated `fynd_qr` schema, enable RLS and deny direct Supabase API roles. Separately provision login for `fynd_qr_app` and use its session-pooler URI as `DATABASE_URL`. The app verifies TLS and rejects privileged database roles; optionally provide `DATABASE_CA_FILE`. For MongoDB, use `MONGODB_URI` and a user limited to the QR database, with TLS and network restrictions. Set only one connection type.
 2. Deploy the Dockerfile to an HTTPS Node/container host and configure `.env.server.example` through the host's secret manager. Set `PASSWORD_LOGIN=1`, `LOCAL_PREVIEW_AUTH=0`, a random stable `ANALYTICS_SECRET` of at least 32 characters, and the deployment's HTTPS origin as `SCAN_BASE_URL`. Apply both SQL migrations before starting this version on PostgreSQL, even when using Google only.
-3. Provision individual accounts using the operator commands below. Verify each recipient's work identity and share credentials privately. There is no public signup or automatic email delivery. Google OAuth is optional for this password pilot.
+3. Provision individual accounts using the operator commands below. Verify each recipient's work identity and share credentials privately. There is no public signup or automatic email delivery. This describes the legacy local password pilot; production Google sign-in uses Supabase Auth.
 4. Keep `SCAN_PAGE_URL=https://sdkfynd.github.io/fynd-qr/` to encode GitHub Pages links of the form `https://sdkfynd.github.io/fynd-qr/#r/<slug>`. Set `APP_ORIGINS=https://sdkfynd.github.io` and build with `VITE_API_URL` pointing to the API origin. Public scan resolution and static creation/downloads need no login; dynamic creation, saved codes and saved logos require an account.
 5. Set the GitHub repository variable `QR_API_URL` to that API origin. The Pages workflow checks backend health, allowed origin, production-safe config, and either Google configuration or at least one enabled password account. Feature-branch pushes do not publish the site; the deployment workflow runs on main or an explicit manual dispatch.
 6. Verify a real individual account, first-login password change, logout, login from another tab, rejected unapproved credentials, and a phone scan outside the developer's network. Change a destination and check the same printed code, analytics, pause and reactivation before rollout.
@@ -29,10 +33,10 @@ Run `pnpm test`, `pnpm typecheck:server`, `pnpm build` and `pnpm check:dist`. Te
 Use Node 24 with the server environment configured. On your laptop, add `--local` while `pnpm dev:full` is running to target its isolated MongoDB instead of the cloud configuration:
 
 ```sh
-pnpm accounts --local create person@gofynd.com "Person Name"
-pnpm accounts --local reset person@gofynd.com
-pnpm accounts --local disable person@gofynd.com
-pnpm accounts --local enable person@gofynd.com
+pnpm accounts --local create person@example.com "Person Name"
+pnpm accounts --local reset person@example.com
+pnpm accounts --local disable person@example.com
+pnpm accounts --local enable person@example.com
 ```
 
 Omit `--local` to administer the configured production database. The command generates a random temporary password and saves it in a mode-0600 file under ignored `.local-data/invites/`; it prints only the file path. Passwords never go in command arguments, repository files or browser configuration. Deliver each file's credentials privately to its verified recipient and delete the delivery file afterwards. The first login requires a different 15–128-character passphrase. There is no shared published password, public signup, password-reset email service or administrator UI. For a forgotten password, the operator uses `reset`. Account names/emails are provisioned explicitly; a typed email suffix alone does not prove employment.
@@ -41,7 +45,7 @@ Passwords use unique random salts and Node scrypt (N=32768, r=8, p=3); only hash
 
 ## Adding Google later
 
-Create a Google OAuth web client and authorize `https://sdkfynd.github.io` plus chosen localhost origins; set `GOOGLE_CLIENT_ID` on the backend. The browser receives a Google ID token with a one-time server nonce. The backend verifies signature, audience, issuer, expiry, verified email and the exact Workspace domain `gofynd.com`. A verified Google identity matching a provisioned account uses that account's existing QR ownership; disabled accounts remain blocked. Google can prove identity without a temporary password change. Creating a new password account after someone already used a separate Google-only identity requires explicit ownership reconciliation; provision the pilot accounts before enabling Google. Test the real consent and company policy flow before enabling it for users.
+Create a Google OAuth web client and authorize `https://sdkfynd.github.io` plus chosen localhost origins; set `GOOGLE_CLIENT_ID` on the backend. The browser receives a Google ID token with a one-time server nonce. The backend verifies signature, audience, issuer, expiry and verified email, without an email-domain restriction. A verified Google identity matching a provisioned account uses that account's existing QR ownership; disabled accounts remain blocked. Google can prove identity without a temporary password change. Creating a new password account after someone already used a separate Google-only identity requires explicit ownership reconciliation; provision the pilot accounts before enabling Google. Test the real consent and company policy flow before enabling it for users.
 
 For direct server redirects, leave `SCAN_PAGE_URL` empty. Newly created codes then encode `SCAN_BASE_URL/r/<slug>` and use an HTTP 302 redirect without JavaScript. Existing records retain their original scan URL when the destination is edited. Keep every previously distributed scan address working after moving repositories or hosts. Changing configuration does not rewrite printed codes. The GitHub scan page requires JavaScript and an available API; link previews that do not execute JavaScript will not follow it or be counted.
 

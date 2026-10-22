@@ -21,7 +21,12 @@ for (const path of files) {
   assert.ok(!/(?:ASSET_SOURCES|CUSTOMIZATION_REVIEW|\.map$)/i.test(name), `Local-only file: ${name}`);
   if (!['.js','.css','.html','.txt','.svg'].includes(extname(path))) continue;
   const content = await readFile(path, 'utf8');
-  assert.ok(!/(?:drive\.google\.com|figma\.com|\/Users\/|slack\.com)/i.test(content), `Internal reference in ${name}`);
+  assert.ok(!/(?:drive\.google\.com|figma\.com|slack\.com)/i.test(content) && !content.includes('/Users/'), `Internal reference in ${name}`);
+  assert.ok(!/sb_secret_[A-Za-z\d_-]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(content), `Private credential in ${name}`);
+  for (const match of content.matchAll(/eyJ[A-Za-z\d_-]+\.[A-Za-z\d_-]+\.[A-Za-z\d_-]+/g)) {
+    let claims; try { claims=JSON.parse(Buffer.from(match[0].split('.')[1],'base64url').toString()); } catch { continue; }
+    assert.notEqual(claims.role,'service_role',`Privileged Supabase key in ${name}`);
+  }
   if (extname(path) === '.html' || extname(path) === '.css') {
     const urls = extname(path) === '.html'
       ? [...content.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m=>m[1])

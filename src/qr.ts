@@ -1,5 +1,5 @@
 import QRCode from 'qrcode';
-import { BODY_SHAPES, FRAME_SHAPES, BALL_SHAPES, renderBody, renderEyeFrame, renderEyeBall, type BodyShape, type EyeFrame, type EyeBall } from './shapes';
+import { BODY_SHAPES, FRAME_SHAPES, BALL_SHAPES, renderBody, renderEyeFrame, renderEyeBall, type BodyShape, type EyeFrame, type EyeBall } from './shapes.ts';
 
 export type ContentType = 'url' | 'text' | 'wifi' | 'email' | 'phone' | 'sms' | 'contact';
 export type Pattern = BodyShape;

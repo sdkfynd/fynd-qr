@@ -3,14 +3,14 @@ import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { connectStore } from './store.ts';
 import { connectPostgresStore } from './postgres-store.ts';
-import { hashPassword, workEmail } from './passwords.ts';
+import { hashPassword, accountEmail } from './passwords.ts';
 
 // Operator-only tool: credentials are never accepted through shell arguments or a public endpoint.
 async function main() {
   const args = process.argv.slice(2), local = args.includes('--local');
   const [action, rawEmail, name, ...extra] = args.filter(a => a !== '--local');
   if (!['create', 'reset', 'disable', 'enable'].includes(action) || !rawEmail || extra.length || (action === 'create' && !name?.trim()) || (action !== 'create' && name)) throw new Error('Usage: pnpm accounts [--local] create email "Name" | reset email | disable email | enable email');
-  const email = workEmail(rawEmail);
+  const email = accountEmail(rawEmail);
   let mongoUri = process.env.MONGODB_URI || '', postgresUri = process.env.DATABASE_URL || '', database = process.env.MONGODB_DATABASE || 'fynd_qr';
   if (local) {
     const connection = JSON.parse(await readFile('.local-data/dev-connection.json', 'utf8'));

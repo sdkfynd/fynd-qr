@@ -1,0 +1,9 @@
+{
+  "imports": {
+    "pg": "npm:pg@8.23.0",
+    "pngjs": "npm:pngjs@7.0.0",
+    "qrcode": "npm:qrcode@1.5.4",
+    "zod": "npm:zod@4.6.5"
+  },
+  "compilerOptions": { "lib": ["deno.window", "dom", "dom.iterable"] }
+}

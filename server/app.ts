@@ -9,14 +9,14 @@ import type { Config } from './config.ts';
 import type { QRStore, CodeDoc, CodePatch } from './repository.ts';
 import { registerLogoRoutes, normalizeStoredLogo } from './logos.ts';
 import { APIError, parseDraft } from './validation.ts';
-import { hashPassword, verifyPassword, workEmail } from './passwords.ts';
+import { hashPassword, verifyPassword, accountEmail } from './passwords.ts';
 import type { CredentialDoc } from './repository.ts';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const hexId = () => randomBytes(12).toString('hex');
 const google = new OAuth2Client();
-export function companyAccount(payload?: TokenPayload): Account {
-  if (!payload?.sub || !payload.email_verified || payload.hd !== 'gofynd.com' || !payload.email?.toLowerCase().endsWith('@gofynd.com')) throw new APIError(403, 'Use your gofynd.com Google Workspace account to continue.');
+export function verifiedGoogleAccount(payload?: TokenPayload): Account {
+  if (!payload?.sub || !payload.email_verified || !payload.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(payload.email)) throw new APIError(403, 'Use a verified Google account to continue.');
   return { id: payload.sub, email: payload.email.toLowerCase(), name: payload.name?.slice(0, 80) || payload.email.split('@')[0] };
 }
 function scanMetadata(request: FastifyRequest, config: Config, id: string, pageScan = false) {
@@ -96,7 +96,7 @@ export async function buildApp(config: Config, store: QRStore, verifyGoogle?: (c
       const invalid = () => new APIError(401, 'Sign-in unsuccessful. Check your credentials or contact the pilot owner. After several attempts, wait 15 minutes.');
       if (!parsed.success) throw invalid();
       let email = '';
-      try { email = workEmail(parsed.data.email); } catch { /* Use the same response and password work for unknown accounts. */ }
+      try { email = accountEmail(parsed.data.email); } catch { /* Use the same response and password work for unknown accounts. */ }
       const credential = email ? await store.getCredentialByEmail(email) : null;
       const available = credential && !credential.disabled && (!credential.lockedUntil || credential.lockedUntil <= new Date());
       const correct = await verifyPassword(parsed.data.password, available ? credential.passwordHash : undefined);
@@ -139,12 +139,15 @@ export async function buildApp(config: Config, store: QRStore, verifyGoogle?: (c
     let payload: TokenPayload | undefined;
     try { payload = verifyGoogle ? await verifyGoogle(parsed.data.credential) : (await google.verifyIdToken({ idToken: parsed.data.credential, audience: config.googleClientId })).getPayload(); }
     catch { throw new APIError(401, 'Google sign-in expired or could not be verified. Please try again.'); }
-    const user = companyAccount(payload);
+    const user = verifiedGoogleAccount(payload);
     const nonce = (payload as TokenPayload & { nonce?: string }).nonce;
     if (!nonce || !await store.consumeChallenge(parsed.data.challengeId, nonce)) throw new APIError(401, 'This sign-in request expired. Please try again.');
     const credential = await store.getCredentialByEmail(user.email);
     if (credential?.disabled) throw new APIError(403, 'This account is disabled. Contact the pilot owner.');
-    // A verified Google identity for the same work email keeps the provisioned account's QR ownership.
+    // Google is authoritative for Gmail and verified Workspace domains. A
+    // consumer Google account using a third-party email cannot claim old work.
+    const authoritative=user.email.endsWith('@gmail.com') || payload?.hd?.toLowerCase()===user.email.split('@')[1];
+    if (credential && !authoritative) throw new APIError(409, 'Your previous workspace needs an ownership check. Contact the site owner.');
     return credential ? session({ ...passwordAccount(credential), mustChangePassword: false }, credential.version) : session(user);
   });
   if (config.localPreview) app.post('/api/auth/local-preview', async request => {

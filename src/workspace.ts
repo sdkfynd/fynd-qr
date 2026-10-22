@@ -1,4 +1,5 @@
-import { account, api, acceptSession, loadGoogle, logout, onAccountChange, restoreSession } from './api';
+import { account, api, acceptSession, loadGoogle, logout, onAccountChange, restoreSession, sessionError } from './api';
+import { supabase, signInGoogle } from './supabase';
 import type { Analytics, QRDraft, QRRecord } from './models';
 import { buildSVG } from './qr';
 import { actionIcon } from './icons';
@@ -8,6 +9,7 @@ export interface EditorBridge {
   draft(): QRDraft;
   record(): QRRecord | null;
   load(record: QRRecord): void;
+  restore(draft: QRDraft, record: QRRecord | null): void;
   saved(record: QRRecord): void;
   dynamic(fresh?: boolean): void;
   reset(): void;
@@ -29,7 +31,7 @@ let authVersion = 0, authBusy = false;
 export function initWorkspace(editor: EditorBridge) {
   bridge = editor;
   document.body.insertAdjacentHTML('beforeend', `
-    <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title"><button class="dialog-close" data-close="account-dialog" aria-label="Close sign in">×</button><span class="eyebrow">YOUR CREATIVE SPACE</span><h2 id="account-title">Keep your connections.</h2><p id="account-reason"></p><div class="auth-benefits"><span>↗ Change a destination anytime</span><span>▥ Understand your scans</span><span>▦ Keep your codes together</span></div><div id="auth-options"></div><p id="auth-error" class="field-error" role="alert"></p><button id="retry-auth" class="text-button" hidden>Try again</button><p class="small-note">Work accounts ending in gofynd.com only. Static generation and downloads stay open to everyone.</p></dialog>
+    <dialog id="account-dialog" class="account-dialog" aria-labelledby="account-title"><button class="dialog-close" data-close="account-dialog" aria-label="Close sign in">×</button><span class="eyebrow">YOUR CREATIVE SPACE</span><h2 id="account-title">Keep your connections.</h2><p id="account-reason"></p><div class="auth-benefits"><span>↗ Change a destination anytime</span><span>▥ Understand your scans</span><span>▦ Keep your codes together</span></div><div id="auth-options"></div><p id="auth-error" class="field-error" role="alert"></p><button id="retry-auth" class="text-button" hidden>Try again</button><p class="small-note">Continue with any Google account. Static generation and downloads stay open to everyone.</p></dialog>
     <dialog id="save-dialog" aria-labelledby="save-title"><button class="dialog-close" data-close="save-dialog" aria-label="Close save">×</button><span class="eyebrow">A LITTLE ORGANIZATION</span><h2 id="save-title">Give your code a name.</h2><form id="save-form"><label class="field-label" for="save-name">Code name</label><input id="save-name" class="workspace-input" maxlength="80" required placeholder="e.g. Reception Wi-Fi"><p class="small-note">Saving stores this code’s content and logo in your account. This includes any Wi-Fi password or contact details you entered.</p><p id="save-error" class="field-error" role="alert"></p><button class="button-primary" id="save-confirm">Save to My QR Codes <span>↗</span></button></form></dialog>
     <dialog id="confirm-dialog" aria-labelledby="confirm-title"><button class="dialog-close" data-close="confirm-dialog" aria-label="Cancel">×</button><h2 id="confirm-title"></h2><p id="confirm-description"></p><div class="dialog-actions"><button class="button-secondary" id="confirm-cancel">Cancel</button><button class="button-primary" id="confirm-yes">Continue</button></div></dialog>
   `);
@@ -66,7 +68,10 @@ export function initWorkspace(editor: EditorBridge) {
     try { await persist({ ...bridge.draft(), name }); $<HTMLDialogElement>('#save-dialog').close(); bridge.toast('Saved. Find it anytime in My QR Codes.'); }
     catch (error) { $('#save-error').textContent = (error as Error).message; }
   });
+  let reportedSessionError='';
   onAccountChange(() => {
+    if (sessionError && sessionError!==reportedSessionError) bridge.toast(sessionError);
+    reportedSessionError=sessionError;
     closeAccount();
     $('#account-button').innerHTML = account ? `<span class="account-avatar" aria-hidden="true">${escape(account.name.charAt(0).toUpperCase())}</span><span class="account-label">Account</span><span aria-hidden="true">⌄</span>` : 'Sign in';
     $('#account-button').setAttribute('aria-label', account ? `Account for ${account.name}` : 'Sign in');
@@ -78,6 +83,14 @@ export function initWorkspace(editor: EditorBridge) {
     $('#account-environment').textContent = 'Local test account · saved on this computer';
     if (!account) { records = []; selected = null; if (workspaceOpen) showEditor(); }
   });
+  try {
+    const pending=sessionStorage.getItem('fynd-qr-oauth-draft');
+    if (pending) {
+      sessionStorage.removeItem('fynd-qr-oauth-draft');
+      const saved=JSON.parse(pending);
+      if (Date.now()-saved.at<30*60_000) bridge.restore(saved.draft,saved.record);
+    }
+  } catch { /* Keep the default editor if tab storage is unavailable. */ }
   void restoreSession();
 }
 export async function requireAuth(reason: string): Promise<boolean> {
@@ -120,8 +133,20 @@ async function authOptions(changePassword = false) {
     catch (error) { if (version === authVersion) { if (changing && !account) await authOptions(); $('#auth-error').textContent = (error as Error).message; } }
     finally { authBusy = false; button.disabled = false; button.textContent = label; }
   };
+  if (supabase && !changing) {
+    $('#auth-error').textContent=sessionError;
+    $('#auth-options').innerHTML='<button id="supabase-google" class="button-secondary" type="button">Continue with Google</button>';
+    $('#supabase-google').addEventListener('click',async () => {
+      const button=$<HTMLButtonElement>('#supabase-google'); button.disabled=true;
+      try {
+        sessionStorage.setItem('fynd-qr-oauth-draft',JSON.stringify({at:Date.now(),draft:bridge.draft(),record:bridge.record()}));
+        await signInGoogle();
+      } catch (error) { $('#auth-error').textContent=(error as Error).message; button.disabled=false; }
+    });
+    return;
+  }
   if (changing) {
-    $('#account-reason').textContent = account?.mustChangePassword ? 'Replace your temporary password to open your workspace.' : 'Choose a new password for your team account.';
+    $('#account-reason').textContent = account?.mustChangePassword ? 'Replace your temporary password to open your workspace.' : 'Choose a new password for your account.';
     $('#auth-options').innerHTML = `<form id="password-change-form" class="auth-form"><input type="text" name="username" autocomplete="username" value="${escape(account?.email || '')}" hidden>${passwordField('current-password', account?.mustChangePassword ? 'Temporary password' : 'Current password', 'current-password')}${passwordField('new-password', 'New password', 'new-password', 15)}<p class="password-hint" id="password-hint">Use 15–128 characters. A few unrelated words make a memorable passphrase.</p>${passwordField('confirm-password', 'Confirm new password', 'new-password', 15)}<button class="button-primary" type="submit">${account?.mustChangePassword ? 'Set password & continue' : 'Update password'} ${actionIcon('arrow')}</button></form>`;
     $('#new-password').setAttribute('aria-describedby', 'password-hint'); wirePasswordToggles(); $('#current-password').focus();
     $('#password-change-form').addEventListener('submit', event => {
@@ -137,7 +162,7 @@ async function authOptions(changePassword = false) {
     if (version !== authVersion) return;
     $('#auth-options').innerHTML = '';
     if (config.passwordLogin) {
-      $('#auth-options').innerHTML = `<form id="password-login-form" class="auth-form"><label class="field-label" for="login-email">Work email</label><input id="login-email" class="workspace-input" type="email" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" placeholder="you@gofynd.com" required>${passwordField('login-password', 'Password', 'current-password')}<button class="button-primary" type="submit">Sign in ${actionIcon('arrow')}</button><p class="password-hint">Need access or a password reset? Contact the person who invited you to the Fynd QR pilot.</p></form>`;
+      $('#auth-options').innerHTML = `<form id="password-login-form" class="auth-form"><label class="field-label" for="login-email">Email</label><input id="login-email" class="workspace-input" type="email" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" placeholder="you@example.com" required>${passwordField('login-password', 'Password', 'current-password')}<button class="button-primary" type="submit">Sign in ${actionIcon('arrow')}</button><p class="password-hint">Need access or a password reset? Contact the person who invited you to the Fynd QR pilot.</p></form>`;
       wirePasswordToggles(); $('#login-email').focus();
       $('#password-login-form').addEventListener('submit', event => {
         event.preventDefault();

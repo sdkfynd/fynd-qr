@@ -1,4 +1,4 @@
-import type { ContentType, Design } from './qr';
+import type { ContentType, Design } from './qr.ts';
 
 export interface QRDraft {
   kind: 'static' | 'dynamic';

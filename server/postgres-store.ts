@@ -21,7 +21,7 @@ function credential(row: Record<string, any>): CredentialDoc {
     lockedUntil: row.locked_until ? date(row.locked_until) : null, createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
 }
 export class PostgresStore implements QRStore {
-  constructor(private sql: SQLDatabase) {}
+  constructor(protected sql: SQLDatabase) {}
   async getCredentialByEmail(email: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.password_accounts where email = $1', [email]); return r ? credential(r) : null; }
   async getCredentialById(id: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.password_accounts where id = $1', [id]); return r ? credential(r) : null; }
   async insertCredential(c: CredentialDoc) { await this.sql.query(`insert into fynd_qr.password_accounts
@@ -60,11 +60,12 @@ export class PostgresStore implements QRStore {
     const { rows } = await this.sql.query('delete from fynd_qr.login_challenges where id = $1 and nonce = $2 and expires_at > $3 returning id', [id, nonce, now]);
     return rows.length === 1;
   }
-  async listCodes(owner: string) { return (await this.sql.query('select * from fynd_qr.qr_codes where owner_id = $1 order by updated_at desc, id limit 501', [owner])).rows.map(code); }
-  async getCode(id: string, owner: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.qr_codes where id = $1 and owner_id = $2', [id, owner]); return r ? code(r) : null; }
-  async getCodeByRequest(owner: string, key: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.qr_codes where owner_id = $1 and request_key = $2', [owner, key]); return r ? code(r) : null; }
+  protected ownerScope(parameter: number) { return `owner_id = $${parameter}`; }
+  async listCodes(owner: string) { return (await this.sql.query(`select * from fynd_qr.qr_codes where ${this.ownerScope(1)} order by updated_at desc, id limit 501`, [owner])).rows.map(code); }
+  async getCode(id: string, owner: string) { const { rows: [r] } = await this.sql.query(`select * from fynd_qr.qr_codes where id = $1 and ${this.ownerScope(2)}`, [id, owner]); return r ? code(r) : null; }
+  async getCodeByRequest(owner: string, key: string) { const { rows: [r] } = await this.sql.query(`select * from fynd_qr.qr_codes where ${this.ownerScope(1)} and request_key = $2`, [owner, key]); return r ? code(r) : null; }
   async getCodeBySlug(slug: string) { const { rows: [r] } = await this.sql.query("select * from fynd_qr.qr_codes where slug = $1 and kind = 'dynamic'", [slug]); return r ? code(r) : null; }
-  async countCodes(owner: string) { const { rows: [r] } = await this.sql.query('select count(*) as count from fynd_qr.qr_codes where owner_id = $1', [owner]); return Number(r.count); }
+  async countCodes(owner: string) { const { rows: [r] } = await this.sql.query(`select count(*) as count from fynd_qr.qr_codes where ${this.ownerScope(1)}`, [owner]); return Number(r.count); }
   async insertCode(c: CodeDoc) {
     await this.sql.query(`insert into fynd_qr.qr_codes
       (id, owner_id, request_key, kind, name, content_type, fields, design, slug, scan_url, destination, payload, status, created_at, updated_at, last_scan_at, total_scans, revision)
@@ -80,13 +81,13 @@ export class PostgresStore implements QRStore {
       values.push(['fields', 'design'].includes(key) ? JSON.stringify(patch[key]) : patch[key]);
       assignments.push(`${columns[key]} = $${values.length}`);
     }
-    const { rows: [r] } = await this.sql.query(`update fynd_qr.qr_codes set ${[...assignments, 'revision = revision + 1'].join(', ')} where id = $1 and owner_id = $2 and revision = $3 returning *`, values);
+    const { rows: [r] } = await this.sql.query(`update fynd_qr.qr_codes set ${[...assignments, 'revision = revision + 1'].join(', ')} where id = $1 and ${this.ownerScope(2)} and revision = $3 returning *`, values);
     return r ? code(r) : null;
   }
-  async listLogos(owner: string) { return (await this.sql.query('select * from fynd_qr.logos where owner_id = $1 order by created_at desc, id limit 100', [owner])).rows.map(logo); }
-  async getLogo(id: string, owner: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.logos where id = $1 and owner_id = $2', [id, owner]); return r ? logo(r) : null; }
-  async getLogoByDigest(owner: string, digest: string) { const { rows: [r] } = await this.sql.query('select * from fynd_qr.logos where owner_id = $1 and digest = $2', [owner, digest]); return r ? logo(r) : null; }
-  async countLogos(owner: string) { const { rows: [r] } = await this.sql.query('select count(*) as count from fynd_qr.logos where owner_id = $1', [owner]); return Number(r.count); }
+  async listLogos(owner: string) { return (await this.sql.query(`select * from fynd_qr.logos where ${this.ownerScope(1)} order by created_at desc, id limit 100`, [owner])).rows.map(logo); }
+  async getLogo(id: string, owner: string) { const { rows: [r] } = await this.sql.query(`select * from fynd_qr.logos where id = $1 and ${this.ownerScope(2)}`, [id, owner]); return r ? logo(r) : null; }
+  async getLogoByDigest(owner: string, digest: string) { const { rows: [r] } = await this.sql.query(`select * from fynd_qr.logos where ${this.ownerScope(1)} and digest = $2`, [owner, digest]); return r ? logo(r) : null; }
+  async countLogos(owner: string) { const { rows: [r] } = await this.sql.query(`select count(*) as count from fynd_qr.logos where ${this.ownerScope(1)}`, [owner]); return Number(r.count); }
   async insertLogo(l: LogoDoc) { await this.sql.query('insert into fynd_qr.logos (id, owner_id, name, digest, image, thumbnail, created_at) values ($1,$2,$3,$4,$5,$6,$7)', [l._id, l.ownerId, l.name, l.digest, l.image, l.thumbnail, l.createdAt]); }
   async recordScan(c: CodeDoc, meta: ScanMeta, now = new Date()) {
     // One SQL statement commits the event and counter together, including under concurrency.

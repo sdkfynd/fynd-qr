@@ -15,9 +15,9 @@ export function checkPassword(password: string) {
   if ([...password].length < 15 || password.length > 128) throw new APIError(400, 'Use a password or passphrase with 15–128 characters.');
   if (/^(.)\1+$/.test(password) || ['passwordpassword', 'password123456789', '123456789012345', 'qwertyuiopasdfgh', 'thisisapassword'].includes(password.toLowerCase())) throw new APIError(400, 'Choose a less predictable password or passphrase.');
 }
-export function workEmail(input: string) {
+export function accountEmail(input: string) {
   const email = input.trim().toLowerCase();
-  if (email.length > 254 || !/^[a-z\d.!#$%&'*+\/=?^_`{|}~-]+@gofynd\.com$/.test(email)) throw new APIError(400, 'Use your gofynd.com work email address.');
+  if (email.length > 254 || !/^[a-z\d.!#$%&'*+\/=?^_`{|}~-]+@[a-z\d-]+(?:\.[a-z\d-]+)+$/.test(email)) throw new APIError(400, 'Enter a valid email address.');
   return email;
 }
 export async function hashPassword(password: string) {

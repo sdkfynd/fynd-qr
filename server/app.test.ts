@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, createHash } from 'node:crypto';
 import { MongoMemoryServer } from 'mongodb-memory-server-core';
-import { buildApp, companyAccount } from './app.ts';
+import { buildApp, verifiedGoogleAccount } from './app.ts';
 import { readConfig } from './config.ts';
 import { connectStore } from './store.ts';
 import { DEFAULT_DESIGN } from '../src/qr.ts';
@@ -29,10 +29,11 @@ before(async () => {
 });
 after(async () => { await app?.close(); await db?.client.close(); await mongod?.stop(); });
 
-test('verified Google Workspace identity is required, not merely an email suffix', () => {
+test('any verified Google account is accepted without a domain restriction', () => {
   const payload = { sub: 'user', email: 'user@gofynd.com', email_verified: true, hd: 'gofynd.com' } as TokenPayload;
-  assert.equal(companyAccount(payload).id, 'user');
-  for (const changed of [{ hd: undefined }, { hd: 'other.com' }, { email_verified: false }, { email: 'user@notgofynd.com' }, { sub: '' }]) assert.throws(() => companyAccount({ ...payload, ...changed }));
+  assert.equal(verifiedGoogleAccount(payload).id, 'user');
+  for (const changed of [{ hd: undefined }, { hd: 'other.com' }, { email: 'person@gmail.com', hd: undefined }, { email: 'person@other.com', hd: 'other.com' }]) assert.ok(verifiedGoogleAccount({ ...payload, ...changed }));
+  for (const changed of [{ email_verified: false }, { email: '' }, { sub: '' }]) assert.throws(() => verifiedGoogleAccount({ ...payload, ...changed }));
 });
 test('Google challenge is nonce-bound, expiring, single-use, and issues a revocable session', async () => {
   const challenge = (await app.inject({ method: 'POST', url: '/api/auth/challenge', headers: { origin } })).json();

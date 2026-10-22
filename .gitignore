@@ -15,3 +15,5 @@ CUSTOMIZATION_REVIEW.md
 
 .local-data/
 !.env.server.example
+!.env.edge.example
+supabase/.temp/

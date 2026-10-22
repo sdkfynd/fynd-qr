@@ -33,9 +33,22 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Verify QR payloads and scan fixtures
         run: pnpm test
+      - name: Verify Deno runtime compatibility
+        run: |
+          pnpm dlx deno@2.9.6 check --no-lock --config supabase/functions/qr-api/deno.json supabase/functions/qr-api/index.ts
+          pnpm dlx deno@2.9.6 test --no-lock --allow-env --allow-read --allow-write --allow-net=127.0.0.1 --config supabase/functions/qr-api/deno.json scripts/edge-runtime.test.ts
+      - name: Deploy the private QR service to Supabase
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          QR_SUPABASE_URL: ${{ vars.QR_SUPABASE_URL }}
+          QR_LEGACY_PROJECT_REF: ${{ vars.QR_LEGACY_PROJECT_REF }}
+        run: node scripts/deploy-supabase.mjs --migrate --deploy
       - name: Verify backend types and deployment readiness
         env:
           QR_API_URL: ${{ vars.QR_API_URL }}
+          QR_SUPABASE_URL: ${{ vars.QR_SUPABASE_URL }}
+          QR_SUPABASE_PUBLISHABLE_KEY: ${{ vars.QR_SUPABASE_PUBLISHABLE_KEY }}
         run: |
           pnpm typecheck:server
           node scripts/check-api.mjs
@@ -46,6 +59,8 @@ jobs:
         env:
           QR_BASE_PATH: ${{ steps.pages.outputs.base_path }}/
           VITE_API_URL: ${{ vars.QR_API_URL }}
+          VITE_SUPABASE_URL: ${{ vars.QR_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.QR_SUPABASE_PUBLISHABLE_KEY }}
         run: |
           pnpm build
           pnpm check:dist
