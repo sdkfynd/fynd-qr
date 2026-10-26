@@ -41,8 +41,9 @@ for (const path of files) {
     }
   }
 }
-for (const path of ['logos/fynd.svg','logos/fynd.png','logos/impetus.png','fonts/fynd-sans-compact.woff2','fonts/inter-display-regular.ttf','THIRD_PARTY_NOTICES.txt','.nojekyll']) await readFile(resolve(root,path));
+for (const path of ['privacy.html','privacy.css','logos/fynd.svg','logos/fynd.png','logos/impetus.png','fonts/fynd-sans-compact.woff2','fonts/inter-display-regular.ttf','THIRD_PARTY_NOTICES.txt','.nojekyll']) await readFile(resolve(root,path));
 const javascript = (await Promise.all(files.filter(p=>p.endsWith('.js')).map(p=>readFile(p,'utf8')))).join('');
 assert.ok(javascript.includes(`${base}logos/fynd.svg`), 'Brand URL does not use the deployment base');
 assert.ok(javascript.includes(`${base}logos/fynd.png`) && javascript.includes(`${base}logos/impetus.png`), 'Preset URLs do not use the deployment base');
+assert.ok(javascript.includes(`${base}privacy.html`), 'Privacy URL does not use the deployment base');
 console.log(`Deployment artifact verified: ${files.length} files, base ${base}, local assets only, no review/private-source metadata.`);

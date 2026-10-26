@@ -12,6 +12,8 @@ https://PROJECT_REF.supabase.co/auth/v1/callback
 
 Store the Google client ID and secret in the selected Supabase project's Google provider. Never place the Google client secret in GitHub Pages or a VITE_ variable. Enable Google, allow signups, set Site URL to `https://sdkfynd.github.io/fynd-qr/`, and allow that exact redirect URL. Add exact localhost redirects only for deliberate development testing. The browser uses Supabase PKCE; Supabase manages access/refresh sessions. A personal Google account must complete the real flow after deployment. Google first-use terms and any new app permissions need the required human consent.
 
+Use `https://sdkfynd.github.io/fynd-qr/` as the OAuth home page and `https://sdkfynd.github.io/fynd-qr/privacy.html` as its public privacy notice. The notice ships in the static artifact and is linked from the site and sign-in dialog. Keep its data-use and retention descriptions aligned with the deployed service. Confirm the notice is publicly reachable before completing Google publication.
+
 ## QR-only database migration
 
 Inventory existing `fynd_qr` data before selecting a different project. The historical project ref is `vqrymevnnxsvitzxezho`; its recorded deployment status is historical, not proof that it is empty or the correct new target. Inspect only QR schema data. If any saved QR codes/logos/accounts exist, preserve their rows, owner ids, slugs, payloads, scan URLs, events and manual-account credentials in a private migration. Keep previously distributed direct API origins serving their old routes.
