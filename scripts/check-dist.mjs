@@ -17,11 +17,16 @@ async function collect(directory) {
 await collect(root);
 for (const path of files) {
   const name = relative(root, path).replaceAll('\\', '/');
-  assert.ok(!/(?:^|\/)(?:\.env|qa|src|work|node_modules|verified-downloads)(?:\.|\/|$)/i.test(name), `Non-site file: ${name}`);
+  assert.ok(!/(?:^|\/)(?:\.env|qa|src|server|.local-data|work|node_modules|verified-downloads)(?:\.|\/|$)/i.test(name), `Non-site file: ${name}`);
   assert.ok(!/(?:ASSET_SOURCES|CUSTOMIZATION_REVIEW|\.map$)/i.test(name), `Local-only file: ${name}`);
   if (!['.js','.css','.html','.txt','.svg'].includes(extname(path))) continue;
   const content = await readFile(path, 'utf8');
-  assert.ok(!/(?:drive\.google\.com|figma\.com|gofynd\.com|\/Users\/|slack\.com)/i.test(content), `Internal reference in ${name}`);
+  assert.ok(!/(?:drive\.google\.com|figma\.com|slack\.com)/i.test(content) && !content.includes('/Users/'), `Internal reference in ${name}`);
+  assert.ok(!/sb_secret_[A-Za-z\d_-]{20,}|-----BEGIN (?:RSA |EC )?PRIVATE KEY-----/.test(content), `Private credential in ${name}`);
+  for (const match of content.matchAll(/eyJ[A-Za-z\d_-]+\.[A-Za-z\d_-]+\.[A-Za-z\d_-]+/g)) {
+    let claims; try { claims=JSON.parse(Buffer.from(match[0].split('.')[1],'base64url').toString()); } catch { continue; }
+    assert.notEqual(claims.role,'service_role',`Privileged Supabase key in ${name}`);
+  }
   if (extname(path) === '.html' || extname(path) === '.css') {
     const urls = extname(path) === '.html'
       ? [...content.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m=>m[1])
@@ -36,8 +41,9 @@ for (const path of files) {
     }
   }
 }
-for (const path of ['logos/fynd.svg','logos/fynd.png','logos/impetus.png','fonts/fynd-sans-compact.woff2','fonts/inter-display-regular.ttf','THIRD_PARTY_NOTICES.txt','.nojekyll']) await readFile(resolve(root,path));
+for (const path of ['privacy.html','privacy.css','logos/fynd.svg','logos/fynd.png','logos/impetus.png','fonts/fynd-sans-compact.woff2','fonts/inter-display-regular.ttf','THIRD_PARTY_NOTICES.txt','.nojekyll']) await readFile(resolve(root,path));
 const javascript = (await Promise.all(files.filter(p=>p.endsWith('.js')).map(p=>readFile(p,'utf8')))).join('');
 assert.ok(javascript.includes(`${base}logos/fynd.svg`), 'Brand URL does not use the deployment base');
 assert.ok(javascript.includes(`${base}logos/fynd.png`) && javascript.includes(`${base}logos/impetus.png`), 'Preset URLs do not use the deployment base');
+assert.ok(javascript.includes(`${base}privacy.html`), 'Privacy URL does not use the deployment base');
 console.log(`Deployment artifact verified: ${files.length} files, base ${base}, local assets only, no review/private-source metadata.`);

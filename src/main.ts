@@ -1,6 +1,11 @@
 import './style.css';
 import './design-system.css';
 import './customization.css';
+import { initWorkspace, saveDynamic } from './workspace';
+import { initLogoLibrary, saveUploadedLogo } from './logos';
+import { initTouchFeedback } from './feedback';
+import { actionIcon } from './icons';
+import type { QRDraft, QRRecord } from './models';
 import { BODY_SHAPES, FRAME_SHAPES, BALL_SHAPES, shapeThumbnail, type ShapeCategory } from './shapes';
 import { logoPresets } from './presets';
 import { normalizeLogo, svgToPng } from './images';
@@ -39,6 +44,13 @@ const types: { id: ContentType; label: string; icon: string; title: string; desc
   { id: 'sms', label: 'SMS', icon: 'sms', title: 'Get the message started.', description: 'Prepare a text message. They choose when to send it.' },
   { id: 'contact', label: 'Contact', icon: 'contact', title: 'Make a lasting connection.', description: 'Share a contact card that saves straight to their phone.' },
 ];
+let qrMode: 'static' | 'dynamic' = 'static';
+let editingCode: QRRecord | null = null;
+let savedSignature = '';
+let campaignName = '';
+let accountSaveBusy = false;
+let staticSnapshot: { type: ContentType; fields: Record<string, string>; design: Design; record: QRRecord | null; signature: string } | null = null;
+let dynamicSnapshot: { fields: Record<string, string>; design: Design; record: QRRecord | null; signature: string; name: string } | null = null;
 let activeType: ContentType = 'url';
 let values: Record<ContentType, Record<string, string>> = { url: { url: 'https://example.com' }, text: {}, wifi: { security: 'WPA' }, email: {}, phone: {}, sms: {}, contact: {} };
 let design: Design = { ...DEFAULT_DESIGN };
@@ -68,18 +80,20 @@ $('#app').innerHTML = `
   <a class="skip-link" href="#generator">Skip to generator</a>
   <header class="site-header wrap">
     <a href="#" class="brand" aria-label="Fynd QR home">${brand}</a>
-    <nav aria-label="Main navigation"><a href="#how-it-works">How it works</a><a href="#questions">FAQs</a><a class="nav-cta" href="#generator">Create a QR code ${icon('arrow')}</a></nav>
+    <nav aria-label="Main navigation"><button id="my-codes" class="nav-library">${icon('contact')}<span>My QR Codes</span></button><div class="account-control"><button id="account-button" class="nav-account" aria-expanded="false" aria-controls="account-panel">Sign in</button><div id="account-panel" class="account-panel" hidden aria-label="Your account"><strong id="account-name"></strong><p id="account-email"></p><span id="account-environment" hidden>Local test account · not Google sign-in</span><button id="account-password" class="account-signout" hidden>Change password</button><button id="account-signout" class="account-signout">Sign out</button></div></div></nav>
   </header>
   <main>
     <section class="hero wrap" aria-labelledby="hero-title">
-      <div class="hero-copy"><div class="eyebrow"><span></span> FREE STATIC QR GENERATOR</div>
+      <div class="hero-copy"><div class="eyebrow"><span></span> YOUR NEXT CONNECTION STARTS HERE</div>
         <h1 id="hero-title">Every connection.<br>One simple scan.</h1>
       </div>
-      <div class="hero-aside"><p>Create a QR code for anything you want to share. Make it yours, download it, and connect.</p><div class="hero-perks"><span>${icon('check')} Free to create</span><span>${icon('check')} No sign-up</span><span>${icon('check')} Yours to keep</span></div></div>
+      <div class="hero-aside"><p>Create a static code for a lasting connection, or go dynamic to update destinations and understand your scans.</p><div class="hero-perks"><span>${icon('check')} Free to create</span><span>${icon('check')} No login for static</span><span>${icon('check')} Yours to keep</span></div><div class="hero-actions"><button class="button-primary" data-static>Create static QR ${icon('arrow')}</button><button class="button-secondary" data-dynamic>Create dynamic QR ${icon('arrow')}</button></div></div>
     </section>
+    <div class="mode-bar wrap"><div class="mode-tabs" role="group" aria-label="QR code mode"><button id="mode-static" data-static aria-pressed="true">Static QR</button><button id="mode-dynamic" data-dynamic aria-pressed="false">Dynamic QR ↗</button></div><p id="mode-description"><strong>Static QR</strong> stores your content directly. It stays the same after download and has no scan analytics.</p></div>
     <section id="generator" tabindex="-1" class="generator wrap" aria-label="QR code generator">
       <div class="editor">
         <div class="section-heading"><span class="step-number">01</span><h2>Make it useful</h2><span class="step-caption">Choose your content</span></div>
+        <div class="dynamic-fields" hidden><label for="campaign-name">Give this connection a name</label><input id="campaign-name" maxlength="80" placeholder="e.g. Summer campaign"><p class="small-note">Only you see this name. The destination can change anytime.</p></div>
         <div class="type-tabs" role="tablist" aria-label="QR code content type">${types.map((t, i) => `<button id="tab-${t.id}" type="button" role="tab" data-type="${t.id}" aria-selected="${i === 0}" aria-controls="content-panel" tabindex="${i === 0 ? '0' : '-1'}">${icon(t.icon)}<span>${t.label}</span></button>`).join('')}</div>
         <div id="content-panel" role="tabpanel" tabindex="0" aria-labelledby="tab-url">
           <h3 id="content-title"></h3><p class="section-description" id="content-description"></p>
@@ -89,7 +103,7 @@ $('#app').innerHTML = `
         <details class="design-section" open>
           <summary><span class="step-number">02</span><h2>Make it yours</h2><span class="step-caption">A little personality</span>${icon('chevron', 'class="disclosure"')}</summary>
           <div class="design-body">
-            <div class="sub-heading"><span>Color palette</span><button id="reset-design" class="text-button" type="button">Reset style</button></div>
+            <div class="sub-heading"><span>Color palette</span><button id="reset-design" class="subtle-button" type="button">${actionIcon('refresh')}<span>Reset style</span></button></div>
             <div class="palettes" role="group" aria-label="Color palettes">
               ${[['Forest', '#173d38', '#ffffff'], ['Ink', '#242727', '#ffffff'], ['Terracotta', '#893f32', '#fff6ed'], ['Ocean', '#214c76', '#eff7ff'], ['Berry', '#653758', '#fdf2f8']].map(([label, foreground, background], i) => `<button class="palette ${i === 0 ? 'selected' : ''}" data-foreground="${foreground}" data-background="${background}" type="button" aria-pressed="${i === 0}" aria-label="${label} palette"><span class="palette-sample" style="--swatch:${foreground};--swatch-bg:${background}"><i></i><i></i><i></i><i></i></span><span>${label}</span>${icon('check', 'class="palette-check"')}</button>`).join('')}
             </div>
@@ -104,37 +118,37 @@ $('#app').innerHTML = `
         </details>
         <details class="logo-section">
           <summary>${icon('image')}<span>Add your logo</span><span class="optional">Optional</span>${icon('chevron', 'class="disclosure"')}</summary>
-          <div class="logo-body"><p class="preset-label">Choose a brand or upload your own</p><div id="logo-presets" class="logo-presets" role="group" aria-label="Brand logo presets">${logoPresets.map(preset => `<button class="logo-preset" data-preset="${preset.id}" type="button" aria-label="${preset.name}" aria-pressed="false"><img src="${preset.src}" alt=""><span>${preset.name}</span></button>`).join('')}</div><label class="upload-area" for="logo-upload">${icon('upload', 'id="upload-icon"')}<img id="logo-thumbnail" alt="Selected logo" width="36" height="36" hidden><span id="logo-label">Choose a logo<span>PNG, JPG or WebP · up to 2 MB</span></span><input type="file" id="logo-upload" aria-label="Choose or replace your logo" aria-describedby="logo-error" accept="image/png,image/jpeg,image/webp"></label><button id="remove-logo" class="text-button" type="button" hidden>Remove logo</button><p id="logo-progress" class="small-note" role="status" hidden>Preparing your logo…</p><p class="small-note">Small logos work best. Always test a scan before printing.</p><p id="logo-error" class="field-error" aria-live="polite"></p></div>
+          <div class="logo-body"><div class="logo-source-tabs" role="tablist" aria-label="Logo source"><button id="logo-add-tab" role="tab" aria-selected="true" aria-controls="logo-add-panel">Add a logo</button><button id="logo-library-tab" role="tab" aria-selected="false" aria-controls="logo-library-panel" tabindex="-1">My logos <span id="logo-library-count"></span></button></div><div id="logo-add-panel" role="tabpanel" aria-labelledby="logo-add-tab"><p class="preset-label">Choose a brand or upload your own</p><div id="logo-presets" class="logo-presets" role="group" aria-label="Brand logo presets">${logoPresets.map(preset => `<button class="logo-preset" data-preset="${preset.id}" type="button" aria-label="${preset.name}" aria-pressed="false"><img src="${preset.src}" alt=""><span>${preset.name}</span></button>`).join('')}</div><label class="upload-area" for="logo-upload">${icon('upload', 'id="upload-icon"')}<img id="logo-thumbnail" alt="Selected logo" width="36" height="36" hidden><span id="logo-label">Choose a logo<span>PNG, JPG or WebP · up to 2 MB</span></span><input type="file" id="logo-upload" aria-label="Choose or replace your logo" aria-describedby="logo-error" accept="image/png,image/jpeg,image/webp"></label></div><div id="logo-library-panel" role="tabpanel" aria-labelledby="logo-library-tab" hidden><div id="logo-library-list"></div></div><p id="logo-save-status" class="small-note logo-save-status" role="status">Uploads are saved to My logos when you’re signed in.</p><button id="logo-retry-save" class="subtle-button" type="button" hidden>${actionIcon('bookmark')}<span>Save to My logos</span></button><button id="remove-logo" class="subtle-button" type="button" hidden>${actionIcon('remove')}<span>Remove logo</span></button><p id="logo-progress" class="small-note" role="status" hidden>Preparing your logo…</p><div id="logo-size-control" class="logo-size-control" hidden><div><label for="logo-size">Logo size</label><output id="logo-size-value" for="logo-size">14%</output></div><input id="logo-size" type="range" min="10" max="18" step="1" value="14" aria-describedby="logo-size-hint"><p id="logo-size-hint" class="small-note">10–18% of the code width. Transparent PNGs blend best. Always test before printing.</p></div><p id="logo-error" class="field-error" aria-live="polite"></p></div>
         </details>
       </div>
       <aside class="preview-panel" aria-label="QR code preview and downloads">
         <div class="preview-content">
         <div class="preview-heading"><h2>Your QR code</h2><span id="preview-status" class="status-pill" role="status" aria-live="polite"><i></i> Live preview</span></div>
         <div class="qr-stage"><span class="stage-corner top-left"></span><span class="stage-corner top-right"></span><span class="stage-corner bottom-left"></span><span class="stage-corner bottom-right"></span><div class="qr-paper"><img id="qr-preview" alt="QR code preview for your website" width="280" height="280"><div id="preview-empty" hidden>${icon('sparkle')}<span>A little detail.<br>A new connection.</span></div></div></div>
-        <p id="preview-error" class="preview-error" hidden></p><button type="button" id="fix-colors" class="text-button" hidden>Edit colors</button><div class="scan-hint" id="scan-hint">${icon('phone')} Point your camera. Try a scan.</div>
+        <p id="preview-error" class="preview-error" hidden></p><button type="button" id="fix-colors" class="subtle-button" hidden>${actionIcon('edit')}<span>Edit colors</span></button><div class="scan-hint" id="scan-hint">${icon('phone')} Point your camera. Try a scan.</div>
         <div class="payload-summary"><span id="payload-icon">${icon('link')}</span><span id="payload-text"></span></div>
         <div class="download-controls"><label for="download-size">PNG size</label><select id="download-size"><option value="512">512 × 512 px</option><option value="1024" selected>1,024 × 1,024 px</option><option value="2048">2,048 × 2,048 px</option><option value="4096">4,096 × 4,096 px</option></select></div>
         <p id="size-note" class="size-note" hidden></p>
         <button type="button" id="download-png" class="button-primary">${icon('download')} <span class="button-label">Download PNG</span> ${icon('arrow')}</button>
         <button type="button" id="download-svg" class="button-secondary">${icon('download')} <span class="button-label">Download SVG</span> <span class="format-hint">Scales to any size</span></button>
-        <p class="download-note">No expiry. No scan limits. All yours.</p>
+        <button id="save-static" type="button" class="save-static save-button">${actionIcon('bookmark')}<span>Save to My QR Codes</span></button><p id="dynamic-error" class="field-error" role="alert"></p><p id="dynamic-link-note" class="dynamic-link-note" hidden></p><p class="download-note">No expiry. No scan limits. All yours.</p>
         <div class="static-note">${icon('info')}<p><strong>Made to stay the same.</strong> This is a static QR code. Its content can’t be changed after download.</p></div>
         </div>
       </aside>
     </section>
-    <div class="privacy-strip wrap">${icon('lock')}<p>A little privacy goes a long way. Your content stays in your browser.</p><button type="button" data-privacy>Our promise ${icon('arrow')}</button></div>
+    <div class="privacy-strip wrap">${icon('lock')}<p>Your QR content stays in your browser until you save. Uploaded logos are kept in your account.</p><button type="button" data-privacy>Our promise ${icon('arrow')}</button></div>
     <section id="how-it-works" class="how-section wrap"><div class="how-intro"><div class="eyebrow">FROM IDEA TO SCAN</div><h2>Three steps.<br>So many connections.</h2><p>A menu on a table. A link on a poster.<br>Your next great idea, one scan away.</p></div><ol class="how-steps"><li><span>1</span><h3>Give it somewhere to go</h3><p>Choose a content type and add the details you want to share.</p></li><li><span>2</span><h3>Add a touch of you</h3><p>Pick your colors, find your style, and make it feel like yours.</p></li><li><span>3</span><h3>Download. Share. Connect.</h3><p>Save your code, test it with your phone, and put it out into the world.</p></li></ol></section>
     <section id="questions" class="faq-section wrap"><div><div class="eyebrow">THE LITTLE DETAILS</div><h2>Good questions.<br>Simple answers.</h2></div><div class="faq-list">
-      <details><summary>Is it really free? ${icon('chevron')}</summary><p>Yes. Create and download as many static QR codes as you like. No account or subscription is needed.</p></details>
-      <details><summary>Will my QR code expire? ${icon('chevron')}</summary><p>The code itself doesn’t expire and has no scan limit. If it links to a website, that website still needs to stay available.</p></details>
-      <details><summary>Can I change it after downloading? ${icon('chevron')}</summary><p>The information is stored directly in this static QR code, so it can’t be updated later. You can create a new code any time. Editable destinations and scan analytics are not part of this version.</p></details>
+      <details><summary>Is it really free? ${icon('chevron')}</summary><p>Yes. Create and download as many static QR codes as you like. Sign in with any Google account to save codes and manage dynamic links. No QR subscription is needed.</p></details>
+      <details><summary>Will my QR code expire? ${icon('chevron')}</summary><p>Static codes don’t expire and have no scan limit. Linked websites must stay available. Dynamic codes also depend on our redirect service remaining available and the code staying active.</p></details>
+      <details><summary>Can I change it after downloading? ${icon('chevron')}</summary><p>Static codes keep their original content. Choose Dynamic QR for an editable website destination and scan analytics. Sign in with Google to create and manage dynamic codes.</p></details>
       <details><summary>Should I download PNG or SVG? ${icon('chevron')}</summary><p>PNG is easy to use on social media, in documents, or in everyday designs. SVG stays sharp at any size, making it a good choice for posters and print.</p></details>
       <details><summary>How do I make sure it scans well? ${icon('chevron')}</summary><p>Use a dark code on a light background and keep the clear border around it. A small logo is best. Test the downloaded file with your phone, and test a printed sample at the actual size before printing more.</p></details>
     </div></section>
   </main>
-  <footer class="site-footer wrap"><a class="brand" href="#" aria-label="Fynd QR home">${brand}</a><p>Made for everyday connections.</p><button type="button" data-privacy>Privacy</button><span>Made for everyone ↗</span></footer>
+  <footer class="site-footer wrap"><a class="brand" href="#" aria-label="Fynd QR home">${brand}</a><p>Made for everyday connections.</p><a href="${import.meta.env.BASE_URL}privacy.html">Privacy</a><span>Made by Fynd ↗</span></footer>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
-  <dialog id="privacy-dialog" aria-labelledby="privacy-title"><button id="close-dialog" class="dialog-close" aria-label="Close privacy information">${icon('close')}</button><span class="dialog-icon">${icon('shield')}</span><h2 id="privacy-title">Your content is yours.</h2><p>QR codes are created right here in your browser. Your links, messages, Wi-Fi passwords, contact details, and logos aren’t sent to a server.</p><p>This prototype has no accounts, cookies, analytics, or browser storage. Refreshing the page clears your entries. Downloaded QR files contain the information you chose to share, so share them with the right people.</p><button type="button" class="button-primary" id="privacy-done">Sounds good ${icon('check')}</button></dialog>
+  <dialog id="privacy-dialog" aria-labelledby="privacy-title"><button id="close-dialog" class="dialog-close" aria-label="Close privacy information">${icon('close')}</button><span class="dialog-icon">${icon('shield')}</span><h2 id="privacy-title">Your content is yours.</h2><p>Static QR codes are generated in your browser. Their content is sent to our account service when you choose Save. Uploaded logos are automatically saved to your private My logos library when you’re signed in. Downloaded files contain the information you chose to share.</p><p>Anyone can sign in with Google. Supabase manages sign-in and stores your session in this browser so it can be refreshed securely. Sign out on shared computers. Google supplies your email and profile name; the app does not request access to your Gmail or Drive. Saved designs and dynamic destinations are stored in our database. Dynamic links record scan events for up to 90 days, including approximate device, browser, referrer and, when available, country. Visitor estimates use a code-specific hash; our analytics do not store raw IP addresses. Hosting providers may keep their own access logs. All-time scan totals remain after detailed events expire.</p><button type="button" class="button-primary" id="privacy-done">Sounds good ${icon('check')}</button></dialog>
 `;
 
 function escapeHtml(value: string) { return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)); }
@@ -166,6 +180,7 @@ function renderForm() {
 }
 function syncWifi() { $('#password-field').hidden = values.wifi.security === 'nopass'; $<HTMLInputElement>('#field-password').disabled = values.wifi.security === 'nopass'; }
 function setType(type: ContentType) {
+  if (qrMode === 'dynamic' && type !== 'url') return;
   activeType = type;
   document.querySelectorAll<HTMLButtonElement>('[data-type]').forEach(button => { const selected = button.dataset.type === type; button.setAttribute('aria-selected', String(selected)); button.tabIndex = selected ? 0 : -1; });
   renderForm(); updatePreview();
@@ -175,17 +190,22 @@ function setType(type: ContentType) {
 function setDownloadEnabled(enabled: boolean) {
   for (const format of ['png', 'svg'] as const) {
     const button = $<HTMLButtonElement>(`#download-${format}`);
-    button.disabled = !enabled || downloadBusy || logoBusy;
+    button.disabled = !enabled || downloadBusy || logoBusy || accountSaveBusy || (qrMode === 'dynamic' && format === 'svg' && dynamicDirty());
     button.setAttribute('aria-busy', String(activeDownload === format));
     button.classList.toggle('is-busy', activeDownload === format);
-    button.querySelector('.button-label')!.textContent = activeDownload === format ? 'Preparing your file…' : `Download ${format.toUpperCase()}`;
+    button.querySelector('.button-label')!.textContent = accountSaveBusy ? 'Saving your code…' : activeDownload === format ? 'Preparing your file…' : qrMode === 'dynamic' && format === 'png' && dynamicDirty() ? (editingCode ? 'Save changes' : 'Create dynamic QR') : `Download ${format.toUpperCase()}`;
   }
+  $<HTMLButtonElement>('#save-static').disabled = !enabled || logoBusy || accountSaveBusy;
 }
 function updatePreview() {
+  $('#logo-size-control').hidden = !design.logo;
+  $<HTMLInputElement>('#logo-size').value = String(design.logoSize ?? 14);
+  $('#logo-size-value').textContent = `${design.logoSize ?? 14}%`;
   clearTimeout(updateTimer);
   currentPayload = null; currentSvg = null;
   $('#content-error').textContent = ''; $('#design-error').textContent = '';
   try { currentPayload = buildPayload(activeType, values[activeType]); } catch (error) { $('#content-error').textContent = (error as Error).message; }
+  if (qrMode === 'dynamic' && currentPayload && editingCode?.scanUrl) currentPayload = editingCode.scanUrl;
   let validDesign = true;
   invalidColor = null;
   try { validateDesign(design); } catch (error) { validDesign = false; invalidColor = error instanceof DesignError ? error.field : 'foreground'; $('#design-error').textContent = (error as Error).message; }
@@ -223,6 +243,13 @@ function updatePreview() {
   $('#payload-text').textContent = summaries[activeType];
   $('#payload-text').title = activeType === 'wifi' ? 'Wi-Fi network name; password is included in the QR code.' : summaries[activeType];
   $('#payload-icon').innerHTML = icon(types.find(t => t.id === activeType)!.icon);
+  if (qrMode === 'dynamic') {
+    const dynamicStatus = !valid ? status : editingCode ? (dynamicDirty() ? 'Unsaved changes' : editingCode.status === 'active' ? 'Dynamic · Active' : `Dynamic · ${editingCode.status}`) : 'Design preview';
+    $('#preview-status').innerHTML = `<i></i> ${dynamicStatus}`;
+    $('#dynamic-link-note').textContent = editingCode?.scanUrl ? `${new URL(editingCode.scanUrl).hostname === 'localhost' ? 'Local test link — opens only on this computer' : 'Permanent scan link'}: ${editingCode.scanUrl}` : 'Create your dynamic code to activate its permanent scan link. This preview shows your design only.';
+    $('#scan-hint').hidden = !editingCode || !valid;
+  }
+  $('#preview-status').classList.toggle('is-live', valid && !logoBusy && (qrMode === 'static' || (!!editingCode && editingCode.status === 'active' && !dynamicDirty())));
   setDownloadEnabled(valid);
 }
 function syncDesignControls() {
@@ -261,6 +288,12 @@ function downloadBlob(blob: Blob, name: string) { const url = URL.createObjectUR
 async function download(format: 'png' | 'svg') {
   updatePreview();
   if (!currentSvg || !currentPayload || downloadBusy || logoBusy) return;
+  if (qrMode === 'dynamic' && !campaignName.trim()) { $('#dynamic-error').textContent = 'Give this code a name before creating it.'; $('#campaign-name').focus(); return; }
+  if (qrMode === 'dynamic' && dynamicDirty()) {
+    accountSaveBusy = true; setDownloadEnabled(false); $('#dynamic-error').textContent = '';
+    try { await saveDynamic(); } finally { accountSaveBusy = false; updatePreview(); }
+    return;
+  }
   const type = activeType, pixels = Number($<HTMLSelectElement>('#download-size').value);
   const svg = buildSVG(currentPayload, { ...design }, pixels);
   const fileName = `fynd-qr-${type}-${pixels}.${format}`;
@@ -337,6 +370,7 @@ async function applyLogo(file: () => Promise<File>, label: string, presetId: str
     $('#logo-thumbnail').hidden = false; $('#upload-icon').setAttribute('hidden', '');
     $('#remove-logo').hidden = false;
     toast('Logo added. Your downloads include it.');
+    if (presetId === null) void saveUploadedLogo(normalized, label);
   } catch (error) { if (revision === logoRevision) $('#logo-error').textContent = (error as Error).message; }
   finally {
     if (revision === logoRevision) { logoBusy = false; $('#logo-progress').hidden = true; $('.upload-area').setAttribute('aria-busy', 'false'); document.querySelectorAll('[data-preset]').forEach(button => button.setAttribute('aria-busy', 'false')); updatePreview(); }
@@ -358,6 +392,7 @@ document.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach(button => 
     return new File([await response.blob()], `${preset.name}.png`, { type: 'image/png' });
   }, `${preset.name} logo`, preset.id);
 }));
+$('#logo-size').addEventListener('input', event => { design.logoSize = Number((event.target as HTMLInputElement).value); updatePreview(); });
 $('#remove-logo').addEventListener('click', () => {
   ++logoRevision; logoBusy = false; selectedPreset = null; delete design.logo;
   document.querySelectorAll('[data-preset]').forEach(button => { button.setAttribute('aria-pressed', 'false'); button.setAttribute('aria-busy', 'false'); });
@@ -375,3 +410,53 @@ $('#privacy-done').addEventListener('click', () => dialog.close());
 dialog.addEventListener('click', event => { if (event.target === dialog) { const r = dialog.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) dialog.close(); } });
 if (window.matchMedia('(max-width: 640px)').matches) $<HTMLDetailsElement>('.design-section').open = false;
 renderForm(); updatePreview();
+const initialStaticSignature = JSON.stringify(editorDraft());
+
+function editorDraft(): QRDraft {
+  return { kind: qrMode, name: qrMode === 'dynamic' ? campaignName.trim() : editingCode?.name || '', contentType: activeType, fields: { ...values[activeType] }, design: { ...design } };
+}
+function dynamicDirty() { return qrMode === 'dynamic' && (!editingCode || JSON.stringify(editorDraft()) !== savedSignature); }
+function modeUI() {
+  const dynamic = qrMode === 'dynamic';
+  $('#generator').classList.toggle('dynamic-editor', dynamic);
+  $('#mode-static').setAttribute('aria-pressed', String(!dynamic)); $('#mode-dynamic').setAttribute('aria-pressed', String(dynamic));
+  $('.dynamic-fields').hidden = !dynamic; $('#save-static').hidden = dynamic; $('#dynamic-link-note').hidden = !dynamic;
+  $('#mode-description').innerHTML = dynamic ? '<strong>Dynamic QR</strong> uses a permanent scan link. Change its destination later and track scans—your printed code stays the same.' : '<strong>Static QR</strong> stores your content directly. It stays the same after download and has no scan analytics.';
+  $('.download-note').textContent = dynamic ? 'Keep your scan service available. Test before printing.' : 'No expiry. No scan limits. All yours.';
+  $('.static-note').innerHTML = icon('info') + (dynamic ? '<p><strong>Made to move with you.</strong> Update the destination in My QR Codes. Your printed QR stays the same.</p>' : '<p><strong>Made to stay the same.</strong> This is a static QR code. Its content can’t be changed after download.</p>');
+  $('#dynamic-error').textContent = ''; $<HTMLInputElement>('#campaign-name').value = campaignName;
+}
+function loadEditor(record: QRRecord) {
+  if (qrMode === 'static' && record.kind === 'dynamic') rememberStatic();
+  qrMode = record.kind; editingCode = record; activeType = record.contentType; values[activeType] = { ...record.fields }; design = { ...record.design }; campaignName = record.name;
+  savedSignature = JSON.stringify(editorDraft()); modeUI(); syncLoadedLogo(); syncDesignControls(); setType(activeType);
+}
+function rememberStatic() { staticSnapshot = { type: activeType, fields: { ...values[activeType] }, design: { ...design }, record: editingCode, signature: savedSignature }; }
+function syncLoadedLogo() {
+  ++logoRevision; logoBusy = false; selectedPreset = null;
+  document.querySelectorAll('[data-preset]').forEach(b => { b.setAttribute('aria-pressed', 'false'); b.setAttribute('aria-busy', 'false'); });
+  $('#logo-progress').hidden = true; $('#logo-error').textContent = ''; $('.upload-area').setAttribute('aria-busy', 'false');
+  $('#logo-thumbnail').hidden = !design.logo; $('#remove-logo').hidden = !design.logo; $('#upload-icon').toggleAttribute('hidden', !!design.logo);
+  if (design.logo) $<HTMLImageElement>('#logo-thumbnail').src = design.logo; else $<HTMLImageElement>('#logo-thumbnail').removeAttribute('src');
+  $('#logo-label').innerHTML = design.logo ? 'Saved logo' : 'Choose a logo<span>PNG, JPG or WebP · up to 2 MB</span>';
+}
+$('#campaign-name').addEventListener('input', event => { campaignName = (event.target as HTMLInputElement).value; $('#dynamic-error').textContent = ''; updatePreview(); });
+initWorkspace({
+  draft: editorDraft, record: () => editingCode, load: loadEditor,
+  restore: (draft, record) => {
+    qrMode=draft.kind; editingCode=record; activeType=draft.contentType; values[activeType]={...draft.fields}; design={...draft.design}; campaignName=draft.name;
+    savedSignature=record?JSON.stringify({kind:record.kind,name:record.name,contentType:record.contentType,fields:record.fields,design:record.design}):'';
+    modeUI(); syncLoadedLogo(); syncDesignControls(); setType(activeType);
+  },
+  saved: record => { editingCode = record; campaignName = record.name; values[activeType] = { ...record.fields }; savedSignature = JSON.stringify(editorDraft()); renderForm(); updatePreview(); },
+  dynamic: (fresh = false) => { if (qrMode === 'dynamic' && !fresh) return; if (qrMode === 'static') rememberStatic(); qrMode = 'dynamic'; const previous = fresh ? null : dynamicSnapshot; editingCode = previous?.record || null; campaignName = previous?.name || ''; savedSignature = previous?.signature || ''; activeType = 'url'; values.url = previous?.fields || { url: '' }; if (previous) design = previous.design; modeUI(); syncLoadedLogo(); syncDesignControls(); setType('url'); $('#campaign-name').focus(); },
+  static: () => { if (qrMode === 'static') return; dynamicSnapshot = { fields: { ...values.url }, design: { ...design }, record: editingCode, signature: savedSignature, name: campaignName }; qrMode = 'static'; editingCode = staticSnapshot?.record || null; savedSignature = staticSnapshot?.signature || ''; if (staticSnapshot) { activeType = staticSnapshot.type; values[activeType] = staticSnapshot.fields; design = staticSnapshot.design; } modeUI(); syncLoadedLogo(); syncDesignControls(); setType(activeType); },
+  dirty: () => editingCode ? JSON.stringify(editorDraft()) !== savedSignature : qrMode === 'dynamic' ? !!(campaignName || values.url.url) : JSON.stringify(editorDraft()) !== initialStaticSignature,
+  reset: () => { staticSnapshot = null; dynamicSnapshot = null; qrMode = 'static'; editingCode = null; campaignName = ''; savedSignature = ''; values = { url: { url: 'https://example.com' }, text: {}, wifi: { security: 'WPA' }, email: {}, phone: {}, sms: {}, contact: {} }; activeType = 'url'; design = { ...DEFAULT_DESIGN }; modeUI(); syncLoadedLogo(); syncDesignControls(); setType('url'); },
+  valid: () => { updatePreview(); return !!currentSvg && !logoBusy; }, toast,
+});
+
+initLogoLibrary((image, name) => {
+  design.logo = image; syncLoadedLogo(); $('#logo-label').textContent = name; updatePreview(); toast('Logo applied from My logos.');
+});
+initTouchFeedback();

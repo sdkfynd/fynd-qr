@@ -27,7 +27,7 @@ document.querySelector('#run').addEventListener('click',async()=>{
  for(const size of [1024,2048,4096]) await test(size+'px PNG preserves dimensions and scan data',async()=>{const payload='https://example.com/export';const blob=await svgToPng(buildSVG(payload,DEFAULT_DESIGN,size),size);const data=await imageData(blob);check(data.width===size&&data.height===size,'wrong PNG size');check(jsQR(data.data,data.width,data.height)?.data===payload,'scan differs')});
  const officialLogos=[];
  for(const preset of logoPresets){const response=await fetch(preset.src);officialLogos.push(await normalizeLogo(new File([await response.blob()],preset.name+'.png',{type:'image/png'})))}
- for(const [bodyIndex,{id:pattern}] of BODY_SHAPES.entries())await test(pattern+': all 64 eye combinations, palette colors and official logos; SVG + PNG; jsQR',async()=>{
+ for(const [bodyIndex,{id:pattern}] of BODY_SHAPES.entries())await test(pattern+': all eye combinations, palette colors and official logos; SVG + PNG; jsQR',async()=>{
   for(const [frameIndex,{id:eyeFrame}] of FRAME_SHAPES.entries())for(const [ballIndex,{id:eyeBall}] of BALL_SHAPES.entries()){
    const [,foreground,background]=palettes[(bodyIndex+frameIndex+ballIndex)%palettes.length];
    const design={foreground,background,pattern,eyeFrame,eyeBall,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[(frameIndex+ballIndex)%2]};
@@ -36,16 +36,16 @@ document.querySelector('#run').addEventListener('click',async()=>{
   }
  });
  const typedExamples=[['url',{url:'example.com/menu?table=7'}],['text',{text:'Hello, नमस्ते 🌿\nA little connection.'}],['wifi',{ssid:'Studio;Guest:2',security:'WPA',password:'test;pass:word\\123',hidden:'true'}],['email',{email:'hello@example.com',subject:'Hello & welcome',body:'A new line\nWith spaces'}],['phone',{phone:'+1 (555) 123-4567'}],['sms',{phone:'+91 98765 43210',message:'Hello & welcome 🌿'}],['contact',{firstName:'Alex',lastName:'Morgan',email:'alex@example.com',phone:'+1 555 123 4567',organization:'Studio; North',website:'example.com'}]];
- for(const [type,values] of typedExamples)await test(type+': eight mixed shapes, independent eye colors, both logos; SVG + PNG; jsQR',async()=>{
+ for(const [type,values] of typedExamples)await test(type+': all mixed shapes, independent eye colors, both logos; SVG + PNG; jsQR',async()=>{
   const text=buildPayload(type,values);
   for(const [i,{id:pattern}] of BODY_SHAPES.entries()){
-   const design={...DEFAULT_DESIGN,pattern,eyeFrame:FRAME_SHAPES[(i+2)%8].id,eyeBall:BALL_SHAPES[(i+5)%8].id,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[i%2]};
+   const design={...DEFAULT_DESIGN,pattern,eyeFrame:FRAME_SHAPES[(i+2)%FRAME_SHAPES.length].id,eyeBall:BALL_SHAPES[(i+5)%FRAME_SHAPES.length].id,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[i%2]};
    await scanBoth(buildSVG(text,design,1024),1024,text);
   }
  });
  for(const [i,{id:pattern}] of BODY_SHAPES.entries())await test(pattern+': 1,100 UTF-8 bytes, mixed eyes, logo; 2048px SVG + PNG; jsQR',async()=>{
   const text='abcdEFG!@é'.repeat(100);
-  const design={...DEFAULT_DESIGN,pattern,eyeFrame:FRAME_SHAPES[i].id,eyeBall:BALL_SHAPES[(i+3)%8].id,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[i%2]};
+  const design={...DEFAULT_DESIGN,pattern,eyeFrame:FRAME_SHAPES[i].id,eyeBall:BALL_SHAPES[(i+3)%FRAME_SHAPES.length].id,eyeFrameColor:'#214c76',eyeBallColor:'#653758',logo:officialLogos[i%2]};
   await scanBoth(buildSVG(text,design,2048),2048,text);
  });
  status.textContent=`${passed} passed; ${failed} failed`;document.querySelector('#run').disabled=false;

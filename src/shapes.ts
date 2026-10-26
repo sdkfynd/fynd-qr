@@ -3,18 +3,24 @@ export const BODY_SHAPES = [
   { id: 'dots', label: 'Dots' }, { id: 'diamond', label: 'Diamond' },
   { id: 'horizontal', label: 'Horizontal' }, { id: 'vertical', label: 'Vertical' },
   { id: 'connected', label: 'Connected' }, { id: 'leaf', label: 'Leaf' },
+  { id: 'soft', label: 'Soft squares' }, { id: 'inset', label: 'Mosaic' },
+  { id: 'classy', label: 'Petal' }, { id: 'octagon', label: 'Octagon' },
 ] as const;
 export const FRAME_SHAPES = [
   { id: 'square', label: 'Square' }, { id: 'rounded', label: 'Rounded' },
   { id: 'soft', label: 'Soft' }, { id: 'bottom-round', label: 'Bottom round' },
   { id: 'leaf', label: 'Leaf' }, { id: 'diagonal', label: 'Diagonal' },
   { id: 'octagon', label: 'Octagon' }, { id: 'top-round', label: 'Top round' },
+  { id: 'circle', label: 'Squircle' }, { id: 'cushion', label: 'Cushion' },
+  { id: 'leaf-reverse', label: 'Leaf left' }, { id: 'diagonal-reverse', label: 'Diagonal left' },
 ] as const;
 export const BALL_SHAPES = [
   { id: 'square', label: 'Square' }, { id: 'rounded', label: 'Rounded' },
   { id: 'top-round', label: 'Top round' }, { id: 'soft', label: 'Soft' },
   { id: 'leaf', label: 'Leaf' }, { id: 'octagon', label: 'Octagon' },
   { id: 'diagonal', label: 'Diagonal' }, { id: 'shield', label: 'Shield' },
+  { id: 'circle', label: 'Squircle' }, { id: 'cushion', label: 'Cushion' },
+  { id: 'leaf-reverse', label: 'Leaf left' }, { id: 'diagonal-reverse', label: 'Diagonal left' },
 ] as const;
 export type BodyShape = typeof BODY_SHAPES[number]['id'];
 export type EyeFrame = typeof FRAME_SHAPES[number]['id'];
@@ -37,6 +43,10 @@ function frameCorners(shape: EyeFrame): Corners {
     case 'leaf': return [1.6,0,1.6,1.6];
     case 'diagonal': return [1.8,0,1.8,0];
     case 'top-round': return [2,2,0,0];
+    case 'circle': return [1.2,1.2,1.2,1.2];
+    case 'cushion': return [1.35,1.35,1.35,1.35];
+    case 'leaf-reverse': return [0,1.6,1.6,1.6];
+    case 'diagonal-reverse': return [0,1.8,0,1.8];
     default: return [0, 0, 0, 0];
   }
 }
@@ -50,6 +60,7 @@ export function renderEyeBall(shape: EyeBall, x = 0, y = 0): string {
   if (shape === 'octagon') return `<path d="${cutPath(x, y, 3, .3)}"/>`;
   const radii: Corners = shape === 'rounded' ? [.35,.35,.35,.35] : shape === 'leaf' ? [.65,0,.65,.65]
     : shape === 'soft' ? [.65,.65,.65,.65] : shape === 'diagonal' ? [.75,0,.75,0]
+    : shape === 'circle' ? [.72,.72,.72,.72] : shape === 'cushion' ? [.8,.8,.8,.8] : shape === 'leaf-reverse' ? [0,.65,.65,.65] : shape === 'diagonal-reverse' ? [0,.55,0,.55]
     : shape === 'shield' ? [.1,.1,.85,.85] : shape === 'top-round' ? [.85,.85,.1,.1] : [0,0,0,0];
   return `<path d="${roundedPath(x,y,3,radii)}"/>`;
 }
@@ -70,6 +81,10 @@ export function renderBody(shape: BodyShape, size: number, isDataDark: (row: num
     } else if (shape === 'dots') parts.push(`<circle cx="${x+.5}" cy="${y+.5}" r=".47"/>`);
     else if (shape === 'diamond') parts.push(`<path d="M${x+.5} ${y}l.5 .5-.5 .5-.5-.5Z"/>`);
     else if (shape === 'rounded') parts.push(`<rect x="${x}" y="${y}" width="1" height="1" rx=".28"/>`);
+    else if (shape === 'soft') parts.push(`<rect x="${x}" y="${y}" width="1" height="1" rx=".46"/>`);
+    else if (shape === 'inset') parts.push(`<rect x="${x+.06}" y="${y+.06}" width=".88" height=".88"/>`);
+    else if (shape === 'octagon') parts.push(`<path d="${cutPath(x,y,1,.18)}"/>`);
+    else if (shape === 'classy') parts.push(`<path d="${roundedPath(x,y,1,[0,.45,.45,.45])}"/>`);
     else if (shape === 'leaf') parts.push(`<path d="${roundedPath(x,y,1,[.48,0,.48,0])}"/>`);
     else if (shape === 'connected') {
       const top = dark(row-1,col), right = dark(row,col+1), bottom = dark(row+1,col), left = dark(row,col-1);

@@ -1,0 +1,8 @@
+project_id = "fynd-qr"
+
+[functions.qr-api]
+# Public scan resolution is anonymous. The handler verifies Supabase Auth JWTs
+# with the Auth server before every account/code/logo/analytics operation.
+verify_jwt = false
+entrypoint = "./functions/qr-api/index.ts"
+import_map = "./functions/qr-api/deno.json"
