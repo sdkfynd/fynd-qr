@@ -16,7 +16,7 @@ Use `https://sdkfynd.github.io/fynd-qr/` as the OAuth home page and `https://sdk
 
 ## QR-only database migration
 
-Inventory existing `fynd_qr` data before selecting a different project. The historical project ref is `vqrymevnnxsvitzxezho`; its recorded deployment status is historical, not proof that it is empty or the correct new target. Inspect only QR schema data. If any saved QR codes/logos/accounts exist, preserve their rows, owner ids, slugs, payloads, scan URLs, events and manual-account credentials in a private migration. Keep previously distributed direct API origins serving their old routes.
+Inventory active QR data sources before selecting a different store. Scope reads to the owning QR project or restored local workspace; historical references to a shared company project do not establish an authorized QR migration source. If any saved QR codes/logos/accounts exist in an authorized source, preserve their rows, owner ids, slugs, payloads, scan URLs, events and manual-account credentials in a private migration. Keep previously distributed direct API origins serving their old routes.
 
 Apply, in order, `server/migrations/001_fynd_qr.sql`, `002_password_accounts.sql` and `003_supabase_auth.sql`. All changes are confined to the QR schema/role; existing `public` tables remain untouched. QR tables remain inaccessible to Supabase anon/authenticated/service-role APIs. Do not add `fynd_qr` to exposed Data API schemas.
 
